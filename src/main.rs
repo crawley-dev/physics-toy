@@ -1,5 +1,3 @@
-// #![allow(unused)]
-
 mod colours;
 mod engine;
 mod toy_physics;
@@ -12,10 +10,10 @@ fn main() {
     let width = 640;
     let height = 400;
 
-    let mut renderer = WindowsRenderer::new("Toy Physics", 640, 400);
+    let renderer = WindowsRenderer::new("Toy Physics", width, height);
     let mut game = Game::new(renderer);
 
-    while (game.is_running()) {
+    while game.is_running() {
         game.update();
     }
 }
