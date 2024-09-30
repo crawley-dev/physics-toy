@@ -1,3 +1,21 @@
+// #![allow(unused)]
+
+mod colours;
+mod engine;
+mod toy_physics;
+use {
+    engine::{Renderer, WindowsRenderer},
+    toy_physics::Game,
+};
+
 fn main() {
-    println!("Hello, world!");
+    let width = 640;
+    let height = 400;
+
+    let mut renderer = WindowsRenderer::new("Toy Physics", 640, 400);
+    let mut game = Game::new(renderer);
+
+    while (game.is_running()) {
+        game.update();
+    }
 }
