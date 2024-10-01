@@ -1,17 +1,15 @@
 use {
-    crate::colours::Colour,
+    crate::colours::{ARGB, RGB},
     minifb::{Window, WindowOptions},
 };
 
-pub trait Renderer<C: Colour> {
-    fn new(title: &str, width: usize, height: usize) -> Self;
+pub trait Renderer {
+    fn new(title: &str, width: usize, height: usize, target_fps: usize) -> Self;
     fn update_window(&mut self);
-    // fn set_window_size(&mut self, width: usize, height: usize);
     fn get_window_size(&self) -> (usize, usize);
+    fn get_target_fps(&self) -> usize;
     fn is_window_open(&self) -> bool;
-    fn as_u32_slice(&self) -> &[u32];
-    fn push_change(&mut self, change: C, x: u32, y: u32);
-    fn to_buf_index(&self, x: u32, y: u32) -> usize;
+    fn push_change(&mut self, change: RGB, index: usize);
 }
 
 // Windows Render contains a Window and a buffer
@@ -19,55 +17,45 @@ pub trait Renderer<C: Colour> {
 // The "Buffer" is a pixel array (0RGB format),
 // .. the buf_width & height represent the dimensions of the buffer and NOT the dimensions of the window.
 // .. The buffer will be equal to or bigger than the window view to avoid re-allocations, keep it large!
-pub struct WindowsRenderer<C: Colour> {
-    pub window: Window,
-    buffer: Vec<C>,
+pub struct WindowsRenderer {
+    window: Window,
+    buffer: Vec<ARGB>,
     buf_width: usize,
     buf_height: usize,
+    target_fps: usize,
 }
 
-impl<C: Colour> Renderer<C> for WindowsRenderer<C> {
-    fn new(title: &str, width: usize, height: usize) -> Self {
+impl WindowsRenderer {
+    fn buf_as_u32_slice(&self) -> &[u32] {
+        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr() as *const u32, self.buffer.len()) }
+    }
+    fn as_mut_ptr(&self) -> *mut WindowsRenderer {
+        self as *const WindowsRenderer as *mut WindowsRenderer
+    }
+}
+
+impl Renderer for WindowsRenderer {
+    fn new(title: &str, width: usize, height: usize, target_fps: usize) -> Self {
         let mut window = match Window::new(title, width, height, WindowOptions::default()) {
             Ok(window) => window,
             Err(e) => panic!("Cannot open window =>\n{e}"),
         };
-        window.set_target_fps(60);
+
+        let mut buffer = Vec::with_capacity(width * height);
+        buffer.resize(buffer.capacity(), ARGB::from(RGB(255, 255, 255)));
+
+        window.set_target_fps(target_fps);
         WindowsRenderer {
             window,
-            buffer: Vec::with_capacity(width * height),
+            buffer,
             buf_width: width,
             buf_height: height,
+            target_fps,
         }
     }
 
-    fn update_window(&mut self) {
-        let (width, height) = self.get_window_size();
-        let buf_slice = self.as_u32_slice();
-
-        // major skill issue ;_;
-        unsafe {
-            (*(self as *const WindowsRenderer<C> as *mut WindowsRenderer<C>))
-                .window
-                .update_with_buffer(buf_slice, width, height)
-                .expect("Window failed to update!");
-        }
-    }
-
-    fn push_change(&mut self, change: C, x: u32, y: u32) {
-        let index = self.to_buf_index(x, y);
-        match self.buffer.get_mut(index) {
-            Some(colour) => *colour = change,
-            None => panic!("renderer.buffer oob: ({x},{y})"),
-        }
-    }
-
-    fn to_buf_index(&self, x: u32, y: u32) -> usize {
-        y as usize * self.buf_width + x as usize
-    }
-
-    fn as_u32_slice(&self) -> &[u32] {
-        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr() as *const u32, self.buffer.len()) }
+    fn get_target_fps(&self) -> usize {
+        self.target_fps
     }
 
     fn get_window_size(&self) -> (usize, usize) {
@@ -76,5 +64,29 @@ impl<C: Colour> Renderer<C> for WindowsRenderer<C> {
 
     fn is_window_open(&self) -> bool {
         self.window.is_open()
+    }
+
+    #[inline]
+    fn push_change(&mut self, change: RGB, index: usize) {
+        match self.buffer.get_mut(index) {
+            Some(colour) => *colour = ARGB::from(change),
+            None => {
+                let y = index / self.buf_width;
+                let x = index - (y * self.buf_width);
+                panic!("renderer.buffer oob: {index} : ({x},{y})",)
+            }
+        }
+    }
+
+    fn update_window(&mut self) {
+        let (width, height) = self.get_window_size();
+
+        let buf = self.buf_as_u32_slice();
+        unsafe {
+            (*self.as_mut_ptr())
+                .window
+                .update_with_buffer(buf, width, height)
+                .expect("Window failed to update!");
+        }
     }
 }

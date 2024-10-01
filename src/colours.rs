@@ -1,31 +1,35 @@
-#[allow(dead_code)]
-pub trait Colour {
-    fn to_rgb(&self) -> (u8, u8, u8);
-    fn to_rgba(&self) -> (u8, u8, u8, u8);
-    fn to_argb(&self) -> (u8, u8, u8, u8);
-    fn from_rgb(r: u8, g: u8, b: u8) -> Self;
-    fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> Self;
-}
+// Is the colour trait implemented for each format
+// with each function hanging off the type or off the instance
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ARGB(u32);
-impl Colour for ARGB {
-    fn to_rgb(&self) -> (u8, u8, u8) {
-        todo!("to_rgb")
-    }
-    fn to_rgba(&self) -> (u8, u8, u8, u8) {
-        todo!("to_rgba")
-    }
-    fn to_argb(&self) -> (u8, u8, u8, u8) {
-        todo!("to_argb")
-    }
+pub struct ARGB(pub u32);
 
-    fn from_rgb(r: u8, g: u8, b: u8) -> Self {
-        let (r, g, b) = (r as u32, g as u32, b as u32);
-        ARGB((r << 16) | (g << 8) | b)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RGB(pub u8, pub u8, pub u8);
+
+impl From<RGB> for ARGB {
+    fn from(value: RGB) -> Self {
+        ARGB((value.0 as u32) << 16 | (value.1 as u32) << 8 | value.2 as u32)
     }
-    fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
-        let (r, g, b, a) = (r as u32, g as u32, b as u32, a as u32);
-        ARGB((a << 24) | (r << 16) | (g << 8) | b)
+}
+
+impl From<ARGB> for RGB {
+    fn from(value: ARGB) -> Self {
+        let r = (u32::from(value) >> 16) as u8;
+        let g = (u32::from(value) >> 8) as u8;
+        let b = u32::from(value) as u8;
+        RGB(r, g, b)
+    }
+}
+
+impl From<ARGB> for u32 {
+    fn from(value: ARGB) -> Self {
+        value.0
+    }
+}
+
+impl From<RGB> for (u8, u8, u8) {
+    fn from(value: RGB) -> Self {
+        (value.0, value.1, value.2)
     }
 }
