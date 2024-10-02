@@ -1,6 +1,5 @@
-use std::time::Instant;
-
 use crate::{colours::*, engine::Renderer};
+use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Material {
@@ -11,6 +10,9 @@ enum Material {
 
 impl Material {
     pub const COLOURS: &[RGB] = &[RGB(30, 30, 30)];
+    fn get_rgb(&self) -> RGB {
+        Material::COLOURS[*self as usize]
+    }
 }
 
 struct Cell {
@@ -77,8 +79,16 @@ impl<R: Renderer> Game<R> {
             );
         }
 
-        // game logic
-        // .. loop through all cells, change colour slightly
+        // self.cells.iter().enumerate().for_each(|(i, c)| {
+        //     self.renderer
+        //         .push_change(RGB(rand::random(), rand::random(), rand::random()), i);
+        // });
+
+        // let cursor = self.renderer.get_cursor_pos();
+        // self.renderer.push_change(
+        //     RGB(255, 0, 0),
+        //     self.get_index(cursor.0 as u32, cursor.1 as u32),
+        // );
 
         // Update Window
         self.renderer.update_window();

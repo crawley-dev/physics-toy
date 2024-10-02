@@ -4,12 +4,13 @@ use {
 };
 
 pub trait Renderer {
-    fn new(title: &str, width: usize, height: usize, target_fps: usize) -> Self;
-    fn update_window(&mut self);
     fn get_window_size(&self) -> (usize, usize);
+    fn get_cursor_pos(&self) -> (f32, f32);
     fn get_target_fps(&self) -> usize;
     fn is_window_open(&self) -> bool;
     fn push_change(&mut self, change: RGB, index: usize);
+    fn new(title: &str, width: usize, height: usize, target_fps: usize) -> Self;
+    fn update_window(&mut self);
 }
 
 // Windows Render contains a Window and a buffer
@@ -52,6 +53,10 @@ impl Renderer for WindowsRenderer {
             buf_height: height,
             target_fps,
         }
+    }
+
+    fn get_cursor_pos(&self) -> (f32, f32) {
+        self.window.get_mouse_pos(minifb::MouseMode::Clamp).unwrap()
     }
 
     fn get_target_fps(&self) -> usize {
