@@ -21,6 +21,7 @@ features = [
     "static-link",
     "use-vcpkg",
     "raw-window-handle",
+    "unsafe_textures",
 ]
 
 [package.metadata.vcpkg]
