@@ -30,7 +30,6 @@ pub trait Renderer {
 //     buf_size: (u32, u32),
 // }
 pub struct WindowsRenderer {
-        event_loop: EventLoop<T>;
 }
 
 impl Renderer for WindowsRenderer {

@@ -7,20 +7,7 @@ edition = "2021"
 
 [dependencies]
 educe = "0.6.0"
+glow = "0.14.1"
 rand = "0.8.5"
 soa-rs = "0.7.2"
 winit = "0.30.5"
-
-[package.metadata.vcpkg]
-dependencies = [
-    "sdl2",
-    "sdl2-image[libjpeg-turbo,tiff,libwebp]",
-    "sdl2-ttf",
-    "sdl2-gfx",
-    "sdl2-mixer",
-]
-git = "https://github.com/microsoft/vcpkg"
-rev = "2024.05.24" # release 2024.05.24 # to check for a new one, check https://github.com/microsoft/vcpkg/releases
-
-[package.metadata.vcpkg.target]
-x86_64-pc-windows-msvc = { triplet = "x64-windows-static-md" }
