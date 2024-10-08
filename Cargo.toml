@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 educe = "0.6.0"
 glow = "0.14.1"
+glutin = "0.32.1"
 rand = "0.8.5"
 soa-rs = "0.7.2"
 winit = "0.30.5"
