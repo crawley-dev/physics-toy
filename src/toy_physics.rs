@@ -13,7 +13,7 @@ enum Material {
 }
 
 impl Material {
-    pub const COLOURS: &[Color] = &[Color::RGB(44, 44, 44), Color::RGB(50, 255, 50)];
+    pub const COLOURS: &'static [Color] = &[Color::RGB(44, 44, 44), Color::RGB(50, 255, 50)];
     fn get_rgb(&self) -> Color {
         Material::COLOURS[*self as usize]
     }
@@ -63,8 +63,7 @@ impl<R: Renderer> Game<R> {
     }
 
     fn get_index(&self, x: u32, y: u32) -> usize {
-        let width = self.renderer.get_window_size().0;
-        y as usize * width as usize + x as usize
+        y as usize * self.grid_size.0 as usize + x as usize
     }
 
     fn get_cell_mut(&mut self, x: u32, y: u32) -> &mut Cell {
@@ -76,10 +75,14 @@ impl<R: Renderer> Game<R> {
     }
 
     fn get_cell(&self, x: u32, y: u32) -> Cell {
-        let idx = self.get_index(x, y);
-        match self.cells.get(idx) {
+        let index = self.get_index(x, y);
+        match self.cells.get(index) {
             Some(cell) => *cell,
-            None => panic!("game.changes oob: ({x},{y})"),
+            None => panic!(
+                "game.changes oob: [{index}] > {} | ({x},{y}) > {:?}",
+                self.cells.len(),
+                self.grid_size
+            ),
         }
     }
 
@@ -91,8 +94,8 @@ impl<R: Renderer> Game<R> {
         }
 
         // to avoid oob..
-        for y in 1..self.grid_size.1 {
-            for x in 1..self.grid_size.0 {
+        for y in 1..self.grid_size.1 - 1 {
+            for x in 1..self.grid_size.0 - 1 {
                 // get cell
                 // check neighbours
                 // change state
@@ -110,27 +113,32 @@ impl<R: Renderer> Game<R> {
                     }
                 }
 
+                let cell = self.get_cell_mut(x, y);
                 if alive_neighbours > 3 || alive_neighbours < 2 {
-
-                    // let cell = self.get_cell_mut(x,y);
-                    // cell.material = match cell.material {
-                    //     Material::Dead => Material::Alive,
-                    //     Material::Dead =>
-                    // }
+                    cell.material = Material::Dead;
+                    self.renderer.push_change(
+                        Material::Dead.get_rgb(),
+                        x,
+                        y,
+                        self.grid_scale,
+                    );
+                } else if alive_neighbours == 3 {
+                    cell.material = Material::Alive;
+                    self.renderer.push_change(
+                        Material::Alive.get_rgb(),
+                        x,
+                        y,
+                        self.grid_scale,
+                    );
                 }
             }
         }
 
-        // for change in &self.last_frame_calls {
-        //     self.renderer
-        //         .push_change(Color::RGB(44, 44, 44), change.0, change.1, self.grid_scale);
-        // }
-        // self.last_frame_calls.clear();
-
-        // let cursor = self.renderer.get_cursor_pos();
-        // self.renderer
-        //     .push_change(Color::RGB(0, 255, 0), cursor.0, cursor.1, self.grid_scale);
-        // self.last_frame_calls.push((cursor.0, cursor.1));
+        self.cells.iter().enumerate().for_each(|(i, cell)| {
+            let x = i as u32 % self.grid_size.0;
+            let y = i as u32 / self.grid_size.0;
+            self.renderer.push_change(cell.material.get_rgb(), x, y, self.grid_scale);
+        });
 
         // Render changes
         self.renderer.render_frame();
@@ -140,7 +148,7 @@ impl<R: Renderer> Game<R> {
             let avg_frame_time =
                 self.start_time.elapsed().as_millis_f64() / self.frame_count as f64;
             println!(
-                "Avg Frametime: {avg_frame_time} ms | Avg Fps: {:.3}",
+                "Avg Frame time: {avg_frame_time} ms | Avg Fps: {:.3}",
                 1000f64 / avg_frame_time
             );
         }

@@ -7,7 +7,7 @@ use engine::{Renderer, WindowsRenderer};
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 600;
-const TARGET_FPS: u32 = 60;
+const TARGET_FPS: u32 = 10;
 
 fn main() -> Result<(), String> {
     std::env::set_var("RUST_BACKTRACE", "1");
