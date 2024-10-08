@@ -1,8 +1,3 @@
-use crate::{engine::Renderer, TARGET_FPS};
-use core::f64;
-use sdl2::pixels::Color;
-use std::time::{Duration, Instant};
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Material {
     // Bedrock,
@@ -13,8 +8,8 @@ enum Material {
 }
 
 impl Material {
-    pub const COLOURS: &'static [Color] = &[Color::RGB(44, 44, 44), Color::RGB(50, 255, 50)];
-    fn get_rgb(&self) -> Color {
+    pub const COLOURS: &'static [u32] = &[u32::RGB(44, 44, 44), u32::RGB(50, 255, 50)];
+    fn get_rgb(&self) -> u32 {
         Material::COLOURS[*self as usize]
     }
 }
