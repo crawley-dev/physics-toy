@@ -1,3 +1,5 @@
+use crate::backend_state::State;
+use crate::frontend::Frontend;
 use winit::dpi::{PhysicalSize, Size};
 use winit::event::{ElementState, KeyEvent};
 use winit::event::{Event, WindowEvent};
@@ -5,99 +7,45 @@ use winit::event_loop::EventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowBuilder};
 
-struct Engine<'a> {
+pub struct Engine<'a> {
     event_loop: EventLoop<()>,
-    surface: wgpu::Surface<'a>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    window_size: winit::dpi::PhysicalSize<u32>,
-    // The window must be declared after the surface so
-    // it gets dropped after it as the surface contains
-    // unsafe references to the window's resources.
-    window: &'a Window,
+    frontend: Frontend,
+    state: State<'a>,
 }
+
 // https://sotrh.github.io/learn-wgpu/beginner/tutorial2-surface/#state-new
 impl<'a> Engine<'a> {
-    async fn new(title: &str, width: u32, height: u32) -> Engine<'a> {
+    pub fn init(title: &str, width: u32, height: u32) -> (EventLoop<()>, Window) {
         assert!(width > 0 && height > 0);
 
         let event_loop = EventLoop::new().unwrap();
-
         let window_size = PhysicalSize::new(width, height);
+
         let window = WindowBuilder::new()
             .with_title(title)
             .with_inner_size(Size::Physical(window_size))
             .build(&event_loop)
             .unwrap();
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            // TODO(TOM): if wasm, GL.
-            ..Default::default()
-        });
+        (event_loop, window)
+    }
 
-        let surface = instance.create_surface(window).unwrap();
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
-
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: Default::default(),
-                    required_limits: Default::default(),
-                    memory_hints: Default::default(),
-                    label: None,
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .find(|x| x.is_srgb())
-            .copied()
-            .unwrap_or(surface_caps.formats[0]);
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: window_size.width,
-            height: window_size.height,
-            present_mode: wgpu::PresentMode::Fifo,
-            desired_maximum_frame_latency: 0,
-            alpha_mode: Default::default(),
-            view_formats: Vec::new(),
-        };
-
+    pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: Frontend) -> Engine<'a> {
+        let state = pollster::block_on(State::new(window));
         Engine {
             event_loop,
-            surface,
-            device,
-            queue,
-            config,
-            window_size,
-            window,
+            frontend,
+            state,
         }
     }
 
-    async fn run(&mut self) {
+    pub fn run(mut self, target_fps: u32) {
         self.event_loop
             .run(move |event, control_flow| match event {
                 Event::WindowEvent {
                     ref event,
                     window_id,
-                } if window_id == window.id() => match event {
+                } if window_id == self.state.window.id() => match event {
                     WindowEvent::CloseRequested
                     | WindowEvent::KeyboardInput {
                         event:
@@ -108,32 +56,30 @@ impl<'a> Engine<'a> {
                             },
                         ..
                     } => control_flow.exit(),
+                    WindowEvent::Resized(physical_size) => {
+                        self.state.resize(*physical_size);
+                    }
+                    WindowEvent::RedrawRequested if window_id == self.state.window.id() => {
+                        self.state.update();
+                        match self.state.render() {
+                            Ok(_) => {}
+                            Err(wgpu::SurfaceError::Lost) => {
+                                self.state.resize(self.state.window_size)
+                            }
+                            Err(wgpu::SurfaceError::OutOfMemory) => control_flow.exit(),
+                            Err(e) => eprintln!("{e:#?}"),
+                        }
+                    }
                     _ => {}
                 },
+                Event::AboutToWait => {
+                    // RedrawRequest will only trigger once unless we manually request it.
+                    self.state.window.request_redraw();
+                }
                 _ => {}
             })
             .unwrap()
     }
-
-    // pub fn window(&self) -> &Window {
-    //     &self.window
-    // }
-    //
-    // fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-    //     todo!()
-    // }
-    //
-    // fn input(&mut self, event: &WindowEvent) -> bool {
-    //     todo!()
-    // }
-    //
-    // fn update(&mut self) {
-    //     todo!()
-    // }
-    //
-    // fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-    //     todo!()
-    // }
 }
 
 // use winit::event_loop::EventLoop;

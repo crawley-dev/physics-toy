@@ -1,3 +1,18 @@
+use crate::backend::Engine;
+
+pub struct Frontend {}
+
+impl<'a> Frontend {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    fn update(&self) {
+        // code to update 1 frame of frontend
+    }
+}
+
+/*
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Material {
     // Bedrock,
@@ -156,3 +171,4 @@ impl<R: Renderer> Game<R> {
         self.frame_count += 1;
     }
 }
+*/
