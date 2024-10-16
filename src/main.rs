@@ -1,10 +1,10 @@
 #![feature(duration_millis_float)]
-#![allow(unused)]
+// #![allow(unused)]
 
 mod backend;
-mod backend_state;
 mod colours;
 mod frontend;
+mod renderer;
 
 pub const INIT_WIDTH: u32 = 800;
 pub const INIT_HEIGHT: u32 = 600;

@@ -58,14 +58,3 @@ impl RGB {
         }
     }
 }
-
-// pub trait Create<T> {
-//     fn create(self) -> T;
-// }
-
-// impl Create<u32> for (u8, u8, u8) {
-//     fn create(self) -> u32 {
-//         let (r, g, b) = self;
-//         (r as u32) << 24 | (g as u32) << 16 | (b as u32) << 8 | 255
-//     }
-// }

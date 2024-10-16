@@ -1,7 +1,7 @@
 use std::time::Instant;
 
-use crate::backend_state::State;
 use crate::frontend::Frontend;
+use crate::renderer::State;
 use crate::{FRAME_TIME_MS, OUTPUT_EVERY_N_FRAMES, TARGET_FPS};
 use log::{info, trace};
 use winit::dpi::{PhysicalSize, Size};
@@ -10,7 +10,6 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::{EventLoop, EventLoopWindowTarget};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowBuilder};
-use winit_input_helper::WinitInputHelper;
 
 pub struct Engine<'a> {
     event_loop: EventLoop<()>,
@@ -97,7 +96,7 @@ impl<'a> Engine<'a> {
                             remaining_frame_time as u64,
                         ));
 
-                        last_ten_frame_times[(self.state.frame as usize % TARGET_FPS as usize)] =
+                        last_ten_frame_times[self.state.frame as usize % TARGET_FPS as usize] =
                             self.state.timer.elapsed().as_secs_f64();
 
                         if (self.state.frame as usize % OUTPUT_EVERY_N_FRAMES as usize) == 0 {

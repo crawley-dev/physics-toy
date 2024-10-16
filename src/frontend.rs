@@ -5,8 +5,8 @@ enum Material {
     // Bedrock,
     // Void,
     // Sand,
-    Dead = 0,
-    Alive = 1,
+    Dead,
+    Alive,
 }
 
 impl Material {
