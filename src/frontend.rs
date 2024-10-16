@@ -1,17 +1,6 @@
-pub struct Frontend {}
+use crate::colours::{RGB, RGBA};
 
-impl<'a> Frontend {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    fn update(&self) {
-        // code to update 1 frame of frontend
-    }
-}
-
-/*
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Material {
     // Bedrock,
     // Void,
@@ -21,16 +10,49 @@ enum Material {
 }
 
 impl Material {
-    pub const COLOURS: &'static [u32] = &[u32::RGB(44, 44, 44), u32::RGB(50, 255, 50)];
+    pub const COLOURS: &'static [RGB] = &[RGB::from_rgb(44, 44, 44), RGB::from_rgb(50, 255, 50)];
     fn get_rgb(&self) -> u32 {
-        Material::COLOURS[*self as usize]
+        Material::COLOURS[*self as usize].as_u32()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Cell {
+pub struct Cell {
     material: Material,
 }
+
+unsafe impl bytemuck::Zeroable for Cell {}
+unsafe impl bytemuck::Pod for Cell {}
+
+pub struct Frontend {
+    pub sim_size: (u32, u32),
+    pub sim_scale: u32,
+    pub sim_buffer: Vec<Cell>,
+}
+
+impl<'a> Frontend {
+    pub fn new(window_width: u32, window_height: u32, sim_scale: u32) -> Self {
+        assert!(window_width > 0 && window_height > 0 && sim_scale > 0 && sim_scale % 2 == 0);
+
+        Self {
+            sim_size: (window_width / sim_scale, window_height / sim_scale),
+            sim_scale,
+            sim_buffer: vec![
+                Cell {
+                    material: Material::Dead
+                };
+                (window_width * window_height) as usize
+            ],
+        }
+    }
+
+    fn update(&self) {
+        // code to update 1 frame of frontend
+    }
+}
+
+/*
+
 
 pub struct Game<R: Renderer> {
     renderer: R,

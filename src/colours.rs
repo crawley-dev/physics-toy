@@ -1,47 +1,71 @@
 // Is the colour trait implemented for each format
 // with each function hanging off the type or off the instance
 
-pub type PackedRGB = (u8, u8, u8);
-use sdl2::pixels::Color;
-
-pub trait Create<T> {
-    fn create(value: T) -> Self;
+pub struct RGBA {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
 }
 
-impl Create<u32> for PackedRGB {
-    fn create(value: u32) -> Self {
-        let r = (value >> 16) as u8;
-        let g = (value >> 8) as u8;
-        let b = value as u8;
-        (r, g, b)
+pub struct RGB {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+impl RGBA {
+    pub const fn as_u32(&self) -> u32 {
+        (self.r as u32) << 24 | (self.g as u32) << 16 | (self.b as u32) << 8 | self.a as u32
     }
-}
 
-impl Create<(u8, u8, u8)> for PackedRGB {
-    fn create(value: (u8, u8, u8)) -> Self {
-        value
+    pub const fn from_rgb(r: u8, g: u8, b: u8) -> RGBA {
+        RGBA { r, g, b, a: 255 }
     }
-}
 
-impl Create<Color> for PackedRGB {
-    fn create(value: Color) -> Self {
-        (value.r, value.g, value.b)
+    pub const fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> RGBA {
+        RGBA { r, g, b, a }
     }
-}
 
-impl Create<PackedRGB> for Color {
-    fn create(value: PackedRGB) -> Self {
-        Color {
-            r: value.0 << 16,
-            g: value.1 << 8,
-            b: value.2,
-            a: 255,
+    pub const fn from_u32(colour: u32) -> RGBA {
+        RGBA {
+            r: ((colour >> 24) & 0xFF) as u8,
+            g: ((colour >> 16) & 0xFF) as u8,
+            b: ((colour >> 8) & 0xFF) as u8,
+            a: (colour & 0xFF) as u8,
         }
     }
 }
 
-impl Create<PackedRGB> for u32 {
-    fn create(value: PackedRGB) -> Self {
-        (value.0 as u32) << 16 | (value.1 as u32) << 8 | value.2 as u32
+impl RGB {
+    pub const fn as_u32(&self) -> u32 {
+        (self.r as u32) << 24 | (self.g as u32) << 16 | (self.b as u32) << 8 | 255
+    }
+
+    pub const fn from_rgb(r: u8, g: u8, b: u8) -> RGB {
+        RGB { r, g, b }
+    }
+
+    pub const fn from_rgba(r: u8, g: u8, b: u8, _a: u8) -> RGB {
+        RGB { r, g, b }
+    }
+
+    pub const fn from_u32(colour: u32) -> RGB {
+        RGB {
+            r: ((colour >> 24) & 0xFF) as u8,
+            g: ((colour >> 16) & 0xFF) as u8,
+            b: ((colour >> 8) & 0xFF) as u8,
+        }
     }
 }
+
+// pub trait Create<T> {
+//     fn create(self) -> T;
+// }
+
+// impl Create<u32> for (u8, u8, u8) {
+//     fn create(self) -> u32 {
+//         let (r, g, b) = self;
+//         (r as u32) << 24 | (g as u32) << 16 | (b as u32) << 8 | 255
+//     }
+// }

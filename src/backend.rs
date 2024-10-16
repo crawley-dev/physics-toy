@@ -1,11 +1,16 @@
+use std::time::Instant;
+
 use crate::backend_state::State;
 use crate::frontend::Frontend;
+use crate::{FRAME_TIME_MS, OUTPUT_EVERY_N_FRAMES, TARGET_FPS};
+use log::{info, trace};
 use winit::dpi::{PhysicalSize, Size};
 use winit::event::{ElementState, KeyEvent};
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::EventLoop;
+use winit::event_loop::{EventLoop, EventLoopWindowTarget};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowBuilder};
+use winit_input_helper::WinitInputHelper;
 
 pub struct Engine<'a> {
     event_loop: EventLoop<()>,
@@ -31,7 +36,13 @@ impl<'a> Engine<'a> {
     }
 
     pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: Frontend) -> Engine<'a> {
-        let state = pollster::block_on(State::new(window));
+        let sim_data = bytemuck::cast_slice(frontend.sim_buffer.as_slice());
+        let state = pollster::block_on(State::new(
+            window,
+            frontend.sim_size,
+            frontend.sim_scale,
+            sim_data,
+        ));
         Engine {
             event_loop,
             frontend,
@@ -39,9 +50,13 @@ impl<'a> Engine<'a> {
         }
     }
 
-    pub fn run(mut self, target_fps: u32) {
-        self.event_loop
-            .run(move |event, control_flow| match event {
+    // TODO(TOM): use matches! macro more , its INCREDIBLE
+
+    pub fn run(mut self) {
+        let mut last_ten_frame_times = [0.0; TARGET_FPS as usize];
+        let closure = |event: Event<()>, control_flow: &EventLoopWindowTarget<()>| {
+            // use self.state.input.update(&event);
+            match event {
                 Event::WindowEvent {
                     ref event,
                     window_id,
@@ -60,91 +75,48 @@ impl<'a> Engine<'a> {
                         self.state.resize(*physical_size);
                     }
                     WindowEvent::RedrawRequested if window_id == self.state.window.id() => {
+                        self.state.timer = Instant::now();
+
                         self.state.update();
                         match self.state.render() {
                             Ok(_) => {}
+                            // can't gracefully exit in oom states
+                            Err(wgpu::SurfaceError::OutOfMemory) => std::process::exit(0),
                             Err(wgpu::SurfaceError::Lost) => {
                                 self.state.resize(self.state.window_size)
                             }
-                            Err(wgpu::SurfaceError::OutOfMemory) => control_flow.exit(),
                             Err(e) => eprintln!("{e:#?}"),
                         }
+
+                        // measure time taken to render current frame
+                        // sleep for remaining time "allotted" to this current frame
+                        let remaining_frame_time = (FRAME_TIME_MS
+                            - self.state.timer.elapsed().as_millis_f64())
+                        .clamp(0.0, FRAME_TIME_MS);
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            remaining_frame_time as u64,
+                        ));
+
+                        last_ten_frame_times[(self.state.frame as usize % TARGET_FPS as usize)] =
+                            self.state.timer.elapsed().as_secs_f64();
+
+                        if (self.state.frame as usize % OUTPUT_EVERY_N_FRAMES as usize) == 0 {
+                            info!(
+                                "Avg FPS: {:.2}",
+                                1.0 / (last_ten_frame_times.iter().sum::<f64>() / TARGET_FPS)
+                            );
+                        }
+                        trace!("Frame time: {:#?}", self.state.timer.elapsed());
                     }
                     _ => {}
                 },
                 Event::AboutToWait => {
-                    // RedrawRequest will only trigger once unless we manually request it.
                     self.state.window.request_redraw();
                 }
                 _ => {}
-            })
-            .unwrap()
+            }
+        };
+
+        self.event_loop.run(closure).unwrap()
     }
 }
-
-// use winit::event_loop::EventLoop;
-
-// const BYTES_PER_PIXEL: usize = 4;
-
-// pub trait Renderer {
-//     fn get_window_size(&self) -> (u32, u32);
-//     fn get_cursor_pos(&self) -> (u32, u32);
-//     fn is_mouse_down(&self) -> bool;
-//     fn is_running(&self) -> bool;
-//
-//     fn push_change(&mut self, colour: u32, x: u32, y: u32, scale: u32);
-//     fn handle_events(&mut self);
-//     fn render_frame(&mut self);
-//     fn new(title: &str, width: u32, height: u32) -> Self;
-// }
-
-// Windows Render contains a Window and a buffer
-// The "Window" is an all-encompassing view of a system window and io events
-// The "Buffer" is a pixel array (0RGB format),
-// .. the buf_width & height represent the dimensions of the buffer and NOT the dimensions of the window.
-// .. The buffer will be equal to or bigger than the window view to avoid re-allocations, keep it large!
-// pub struct WindowsRenderer {
-//     sdl_context: Sdl,
-//     event_handler: EventPump,
-//     video_subsystem: VideoSubsystem,
-//     canvas: Canvas<Window>,
-//     texture: Texture,
-//     pixel_buf: Vec<u8>,
-//     running: bool,
-//     buf_size: (u32, u32),
-// }
-// pub struct WindowsRenderer {}
-//
-// impl Renderer for WindowsRenderer {
-//     fn get_window_size(&self) -> (u32, u32) {
-//         todo!()
-//     }
-//
-//     fn get_cursor_pos(&self) -> (u32, u32) {
-//         todo!()
-//     }
-//
-//     fn is_mouse_down(&self) -> bool {
-//         todo!()
-//     }
-//
-//     fn is_running(&self) -> bool {
-//         todo!()
-//     }
-//
-//     fn push_change(&mut self, colour: u32, x: u32, y: u32, scale: u32) {
-//         todo!()
-//     }
-//
-//     fn handle_events(&mut self) {
-//         todo!()
-//     }
-//
-//     fn render_frame(&mut self) {
-//         todo!()
-//     }
-//
-//     fn new(title: &str, width: u32, height: u32) -> Self {
-//         todo!()
-//     }
-// }
