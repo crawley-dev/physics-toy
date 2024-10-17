@@ -1,4 +1,8 @@
-use crate::colours::{RGB, RGBA};
+use log::{info, trace};
+use winit::dpi::PhysicalSize;
+
+use crate::colours::RGB;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Material {
@@ -11,8 +15,8 @@ enum Material {
 
 impl Material {
     pub const COLOURS: &'static [RGB] = &[RGB::from_rgb(44, 44, 44), RGB::from_rgb(50, 255, 50)];
-    fn get_rgb(&self) -> u32 {
-        Material::COLOURS[*self as usize].as_u32()
+    pub fn get_rgb(&self) -> RGB {
+        Material::COLOURS[*self as usize]
     }
 }
 
@@ -24,36 +28,103 @@ pub struct Cell {
 unsafe impl bytemuck::Zeroable for Cell {}
 unsafe impl bytemuck::Pod for Cell {}
 
+pub struct SimData<'a> {
+    pub rgba_buf: &'a [u8],
+    pub size: PhysicalSize<u32>,
+    pub scale: u32,
+}
+
 pub struct Frontend {
-    pub sim_size: (u32, u32),
+    pub frame: u64,
+    pub timer: Instant,
+    pub start: Instant,
+
     pub sim_scale: u32,
-    pub sim_buffer: Vec<Cell>,
+    pub sim_size: PhysicalSize<u32>,
+    pub sim_buf: Vec<Cell>,
+    pub sim_rgba_buf: Vec<u8>,
 }
 
 impl<'a> Frontend {
     pub fn new(window_width: u32, window_height: u32, sim_scale: u32) -> Self {
-        assert!(window_width > 0 && window_height > 0 && sim_scale > 0 && sim_scale % 2 == 0);
+        assert!(window_width > 0 && window_height > 0 && sim_scale > 0);
+
+        let sim_size = PhysicalSize::new(window_width / sim_scale, window_height / sim_scale);
+        let cell_count = (sim_size.width * sim_size.height) as usize;
+
+        let sim_buf = vec![
+            Cell {
+                material: Material::Dead
+            };
+            cell_count
+        ];
+        let mut sim_rgba_buf = Vec::with_capacity(cell_count * 4);
+        for cell in &sim_buf {
+            let rgb = cell.material.get_rgb();
+            sim_rgba_buf.push(rgb.r);
+            sim_rgba_buf.push(rgb.g);
+            sim_rgba_buf.push(rgb.b);
+            sim_rgba_buf.push(255);
+        }
+        info!("Sim rgba buf len: {}", sim_rgba_buf.len());
 
         Self {
-            sim_size: (window_width / sim_scale, window_height / sim_scale),
+            sim_size,
             sim_scale,
-            sim_buffer: vec![
-                Cell {
-                    material: Material::Dead
-                };
-                (window_width * window_height) as usize
-            ],
+            sim_buf,
+            sim_rgba_buf,
+            timer: Instant::now(),
+            start: Instant::now(),
+            frame: 0,
         }
     }
 
-    fn update(&self) {
-        // code to update 1 frame of frontend
+    pub fn update(&mut self) {
+        self.timer = Instant::now();
+        self.frame += 1;
+    }
+
+    pub fn resize(&mut self, size: PhysicalSize<u32>) {
+        self.sim_size =
+            PhysicalSize::new(size.width / self.sim_scale, size.height / self.sim_scale);
+        let cell_count = (self.sim_size.width * self.sim_size.height) as usize;
+
+        self.sim_buf = vec![
+            Cell {
+                material: Material::Dead
+            };
+            cell_count
+        ];
+        self.sim_rgba_buf = Vec::with_capacity(cell_count * 4);
+        for cell in &self.sim_buf {
+            let rgb = cell.material.get_rgb();
+            self.sim_rgba_buf.push(rgb.r);
+            self.sim_rgba_buf.push(rgb.g);
+            self.sim_rgba_buf.push(rgb.b);
+            self.sim_rgba_buf.push(255);
+        }
+        trace!("Frontend resized: {}", self.sim_rgba_buf.len());
+    }
+
+    pub fn get_sim_data(&self) -> SimData {
+        SimData {
+            rgba_buf: &self.sim_rgba_buf,
+            size: self.sim_size,
+            scale: self.sim_scale,
+        }
+    }
+
+    fn get_index(&self, x: u32, y: u32) -> usize {
+        (y * self.sim_size.width + x) as usize
+    }
+
+    fn update_cell(&mut self, x: u32, y: u32, material: Material) {
+        let index = self.get_index(x, y);
+        self.sim_buf[index] = Cell { material };
     }
 }
 
 /*
-
-
 pub struct Game<R: Renderer> {
     renderer: R,
     cells: Vec<Cell>,

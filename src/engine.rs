@@ -1,49 +1,45 @@
-use log::info;
-use std::time::Instant;
+use log::{error, info, trace, warn};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 use winit_input_helper::WinitInputHelper;
 
-// This is all the nitty gritty code of the backend. whilst "backend.rs" is the interface
-pub struct State<'a> {
-    pub input: WinitInputHelper,
-    pub timer: Instant,
-    pub start: Instant,
-    pub frame: u64,
+use crate::frontend::SimData;
 
-    pub surface: wgpu::Surface<'a>,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-    pub config: wgpu::SurfaceConfiguration,
-    pub window_size: PhysicalSize<u32>,
-    pub render_pipeline: wgpu::RenderPipeline,
-    pub bind_group: wgpu::BindGroup,
+pub struct Engine<'a> {
+    input: WinitInputHelper,
+    surface: wgpu::Surface<'a>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    window_size: PhysicalSize<u32>,
+    render_pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
 
     pub texture: wgpu::Texture,
-    pub gpu_data: GpuData,
-    pub gpu_buffer: wgpu::Buffer,
+    gpu_uniforms: GpuUniforms,
+    gpu_data_buffer: wgpu::Buffer,
+    sampler: wgpu::Sampler,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
     pub window: &'a Window,
 }
 
+// Data to pass to gpu, MUST have 16 byte alignment
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct GpuData {
+pub struct GpuUniforms {
+    _padding: f32,
     pub time: f32,
+    pub texture_size: [f32; 2],
 }
 
-unsafe impl bytemuck::Zeroable for GpuData {}
-unsafe impl bytemuck::Pod for GpuData {}
+unsafe impl bytemuck::Zeroable for GpuUniforms {}
+unsafe impl bytemuck::Pod for GpuUniforms {}
 
-impl<'a> State<'a> {
-    pub async fn new(
-        window: &'a Window,
-        texture_size: (u32, u32),
-        scale: u32,
-        sim_data: &[u8],
-    ) -> Self {
+impl<'a> Engine<'a> {
+    pub async fn new(window: &'a Window, sim_data: &SimData<'_>) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             // TODO(TOM): if wasm, use GL.
@@ -84,9 +80,11 @@ impl<'a> State<'a> {
         let surface_format = capabilities
             .formats
             .iter()
-            .find(|x| x.is_srgb())
+            .find(|x| **x == wgpu::TextureFormat::Rgba8Unorm)
             .copied()
             .unwrap_or(capabilities.formats[0]);
+        assert_eq!(surface_format, wgpu::TextureFormat::Rgba8Unorm);
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -109,54 +107,29 @@ impl<'a> State<'a> {
 
         // >> Creating Texture <<
         let texture_size = wgpu::Extent3d {
-            width: texture_size.0,
-            height: texture_size.1,
+            width: sim_data.size.width,
+            height: sim_data.size.height,
             depth_or_array_layers: 1, // set to 1 for 2D textures
         };
-        // let texture_data =
-        //     vec![44u8; texture_size.width as usize * texture_size.height as usize * 4];
-        let texture_desc = wgpu::TextureDescriptor {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("RGBA Texture"),
             size: texture_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // SRGB (3 bpp)
-            format: config.format,
+            format: config.format, // SRGB (3 bpp)
             // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
             // COPY_DST means that we want to copy data to this texture
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            // This specifies what texture formats can be used to create TextureViews for this texture.
-            // The base texture format is always supported. Note that using a different texture format
-            // is not supported on the WebGL2 backend.
+            // This specifies other texture formats that can be used to create TextureViews.
+            // not supported on the WebGL2 backend.
             view_formats: &[],
-        };
-        let texture = device.create_texture(&texture_desc);
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        info!("Texture created");
-
-        // Initial write of the texture data, have no 'self' so cannot use method.
-        // TODO(TOM): verify this stays in sync with method self.update_texture()
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &sim_data,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * texture_size.width),
-                rows_per_image: Some(texture_size.height),
-            },
-            texture_size,
-        );
-        info!("RGBA Buffer uploaded to texture.");
+        });
+        Self::update_texture(&queue, &texture, sim_data);
+        info!("Texture created, size: {:?}", texture.size());
 
         // >> Creating bind group layout <<
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("bind_group_layout"),
             entries: &[
@@ -252,17 +225,22 @@ impl<'a> State<'a> {
         });
 
         // Create a GPU buffer to hold time values, for shader code!
-        let gpu_data = GpuData { time: 0.0 };
-        let gpu_buffer = wgpu::util::DeviceExt::create_buffer_init(
+        let gpu_uniforms = GpuUniforms {
+            _padding: 0.0,
+            time: 0.0,
+            texture_size: [texture_size.width as f32, texture_size.height as f32],
+        };
+        let gpu_data_buffer = wgpu::util::DeviceExt::create_buffer_init(
             &device,
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[gpu_data]),
+                contents: bytemuck::cast_slice(&[gpu_uniforms]),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
         );
         info!("Uniform Buffer created");
 
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bind_group"),
             layout: &bind_group_layout,
@@ -277,17 +255,14 @@ impl<'a> State<'a> {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: gpu_buffer.as_entire_binding(),
+                    resource: gpu_data_buffer.as_entire_binding(),
                 },
             ],
         });
         info!("Bind Group created");
 
         Self {
-            timer: Instant::now(),
-            start: Instant::now(),
             input: WinitInputHelper::new(),
-            frame: 0,
             surface,
             device,
             queue,
@@ -295,50 +270,31 @@ impl<'a> State<'a> {
             window_size,
             render_pipeline,
             bind_group,
+            bind_group_layout,
             texture,
-            gpu_data,
-            gpu_buffer,
+            gpu_uniforms,
+            gpu_data_buffer,
+            sampler,
             window,
         }
     }
 
-    pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        assert!(new_size > PhysicalSize::from((0, 0)));
-        self.window_size = new_size;
-        self.config.width = new_size.width;
-        self.config.height = new_size.height;
-        self.surface.configure(&self.device, &self.config);
-    }
-
-    pub fn update_texture(&self, data: &[u8], window_size: PhysicalSize<u32>) {
-        self.queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            data,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * window_size.width),
-                rows_per_image: Some(window_size.height),
-            },
-            wgpu::Extent3d {
-                width: window_size.width,
-                height: window_size.height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
-    pub fn update(&mut self) {
-        self.frame += 1;
-    }
-
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        // gets the current back SurfaceTexture to use, that will then be presented.
-        let frame = self.surface.get_current_texture()?;
+    pub fn render(&mut self, sim_data: &SimData, elapsed: f32) {
+        let frame = match self.surface.get_current_texture() {
+            Ok(frame) => frame,
+            // can't gracefully exit in oom states
+            Err(wgpu::SurfaceError::OutOfMemory) => std::process::exit(0),
+            Err(wgpu::SurfaceError::Lost) => {
+                self.resize(self.window_size, sim_data);
+                // TODO(TOM): logging the error, but not handling it.
+                error!("SurfaceError::Lost, cannot resize simulation in this scope. fix this tom!");
+                return;
+            }
+            Err(e) => {
+                error!("{e:#?}");
+                return;
+            }
+        };
 
         // Creates necessary metadata of the texture for the render pass.
         let view = frame
@@ -359,14 +315,6 @@ impl<'a> State<'a> {
                 view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    // Load field determines what is done with the previous frame's contents
-                    // >> in this case, we clear the frame to a block color.
-                    // load: wgpu::LoadOp::Clear(wgpu::Color {
-                    //     r: 0.1,
-                    //     g: 0.2,
-                    //     b: 0.3,
-                    //     a: 1.0,
-                    // }),
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
@@ -377,21 +325,112 @@ impl<'a> State<'a> {
         });
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
+        trace!("Bound items to render pass");
 
         // Writing new time value to a GPU buffer, for shader code to access!
-        let elapsed = self.start.elapsed().as_secs_f32();
-        self.queue
-            .write_buffer(&self.gpu_buffer, 0, bytemuck::cast_slice(&[elapsed]));
+        self.gpu_uniforms.time = elapsed;
+        self.queue.write_buffer(
+            &self.gpu_data_buffer,
+            0, // the entire uniform buffer is updated.
+            bytemuck::cast_slice(&[self.gpu_uniforms]),
+        );
+
+        Self::update_texture(&self.queue, &self.texture, sim_data);
 
         // Takes 6 vertices (2 triangles = 1 square) and the vertex & fragment shader
         render_pass.draw(0..6, 0..1);
 
         // Drop render_pass' mutable reference to encoder, crashes otherwise.
         drop(render_pass);
+        trace!("Dropped render_pass");
 
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
+    }
 
-        Ok(())
+    pub fn resize(&mut self, window_size: PhysicalSize<u32>, sim_data: &SimData) {
+        trace!("Attempting window & texture resize to {:?}", sim_data.size);
+
+        self.window_size = window_size;
+        self.config.width = self.window_size.width;
+        self.config.height = self.window_size.height;
+        self.surface.configure(&self.device, &self.config);
+
+        // create new texture
+        self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGBA Texture"),
+            size: wgpu::Extent3d {
+                width: sim_data.size.width,
+                height: sim_data.size.height,
+                depth_or_array_layers: 1, // set to 1 for 2D textures
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format, // SRGB (3 bpp)
+            // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
+            // COPY_DST means that we want to copy data to this texture
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // This specifies other texture formats that can be used to create TextureViews.
+            // not supported on the WebGL2 backend.
+            view_formats: &[],
+        });
+
+        // update gpu data
+        self.gpu_uniforms.texture_size = [sim_data.size.width as f32, sim_data.size.height as f32];
+
+        // update binding group
+        let texture_view = self
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bind_group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.gpu_data_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        Self::update_texture(&self.queue, &self.texture, sim_data);
+    }
+
+    fn update_texture(queue: &wgpu::Queue, texture: &wgpu::Texture, sim_data: &SimData) {
+        let tex_size = texture.size();
+        let computed_data_len = (4 * sim_data.size.width * sim_data.size.height) as usize;
+
+        assert_eq!(tex_size.width, sim_data.size.width);
+        assert_eq!(tex_size.height, sim_data.size.height);
+        assert_eq!(sim_data.rgba_buf.len(), computed_data_len);
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            sim_data.rgba_buf,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * sim_data.size.width),
+                rows_per_image: Some(sim_data.size.height),
+            },
+            wgpu::Extent3d {
+                width: sim_data.size.width,
+                height: sim_data.size.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 }
