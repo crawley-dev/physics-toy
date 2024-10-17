@@ -1,30 +1,38 @@
-use std::time::Instant;
-
-use crate::engine::Engine;
-use crate::frontend::Frontend;
-use crate::{FRAME_TIME_MS, OUTPUT_EVERY_N_FRAMES, TARGET_FPS};
+use crate::{
+    engine::Engine,
+    frontend::Frontend,
+    utils::{Shape, WindowPosition, WindowSize},
+    FRAME_TIME_MS, OUTPUT_EVERY_N_FRAMES, TARGET_FPS,
+};
 use log::{info, trace};
-use winit::dpi::{PhysicalSize, Size};
-use winit::event::{ElementState, KeyEvent};
-use winit::event::{Event, WindowEvent};
-use winit::event_loop::{EventLoop, EventLoopWindowTarget};
-use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowBuilder};
+use std::time::Instant;
+use winit::{
+    dpi::{PhysicalSize, Size},
+    event::{ElementState, KeyEvent, MouseButton},
+    event::{Event, WindowEvent},
+    event_loop::{EventLoop, EventLoopWindowTarget},
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Window, WindowBuilder},
+};
+
+pub struct InputData {
+    pub mouse: WindowPosition<u32>,
+    pub mouse_down: bool,
+}
 
 pub struct App<'a> {
     event_loop: EventLoop<()>,
     frontend: Frontend,
     engine: Engine<'a>,
+    input_data: InputData,
 }
 
 // https://sotrh.github.io/learn-wgpu/beginner/tutorial2-surface/#engine-new
 impl<'a> App<'a> {
-    pub fn init(title: &str, width: u32, height: u32) -> (EventLoop<()>, Window) {
-        assert!(width > 0 && height > 0);
+    pub fn init(title: &str, window_size: WindowSize<u32>) -> (EventLoop<()>, Window) {
+        assert!(window_size.width > 0 && window_size.height > 0);
 
         let event_loop = EventLoop::new().unwrap();
-        let window_size = PhysicalSize::new(width, height);
-
         let window = WindowBuilder::new()
             .with_title(title)
             .with_inner_size(Size::Physical(window_size))
@@ -40,6 +48,10 @@ impl<'a> App<'a> {
             event_loop,
             frontend,
             engine,
+            input_data: InputData {
+                mouse: WindowPosition { x: 0, y: 0 },
+                mouse_down: false,
+            },
         }
     }
 
@@ -55,7 +67,29 @@ impl<'a> App<'a> {
                 } if window_id == self.engine.window.id() => match event {
                     WindowEvent::CloseRequested => control_flow.exit(),
                     WindowEvent::KeyboardInput { event, .. } => {
-                        Self::handle_input(event, control_flow);
+                        Self::handle_keyboard_input(event, control_flow);
+                    }
+                    WindowEvent::MouseInput { state, button, .. } => {
+                        // TODO(TOM): this event does not finish until mouse is released, analyse whether an input is being held down, if so re-trigger thte input
+                        // Self::handle_mouse_input(button, state);
+                        if *state == ElementState::Released {
+                            return;
+                        }
+
+                        info!("Click! Mouse: {:?}", self.input_data.mouse);
+
+                        match button {
+                            MouseButton::Left => self.frontend.draw(
+                                Shape::Square { side: 10 },
+                                self.input_data.mouse_x,
+                                self.input_data.mouse_y,
+                            ),
+                            _ => {}
+                        }
+                    }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        self.input_data.mouse_x = position.x as u32;
+                        self.input_data.mouse_y = position.y as u32;
                     }
                     WindowEvent::Resized(physical_size) => {
                         if self.engine.window.is_minimized().unwrap() {
@@ -97,7 +131,7 @@ impl<'a> App<'a> {
         self.event_loop.run(closure).unwrap()
     }
 
-    fn handle_input(event: &KeyEvent, control_flow: &EventLoopWindowTarget<()>) {
+    fn handle_keyboard_input(event: &KeyEvent, control_flow: &EventLoopWindowTarget<()>) {
         if let KeyEvent {
             state: ElementState::Pressed,
             physical_key,
@@ -113,6 +147,19 @@ impl<'a> App<'a> {
                     info!("Unidentified key pressed.");
                 }
             }
+        }
+    }
+
+    fn handle_mouse_input(event: &MouseButton, state: &ElementState) {
+        if *state == ElementState::Released {
+            return;
+        }
+
+        match event {
+            MouseButton::Left => {}
+            MouseButton::Right => {}
+            MouseButton::Middle => {}
+            _ => {}
         }
     }
 

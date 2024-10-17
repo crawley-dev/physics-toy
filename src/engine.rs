@@ -1,8 +1,7 @@
+use crate::frontend::SimData;
 use log::{error, info, trace, warn};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
-
-use crate::frontend::SimData;
 
 pub struct Engine<'a> {
     surface: wgpu::Surface<'a>,

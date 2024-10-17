@@ -1,6 +1,8 @@
 // Is the colour trait implemented for each format
 // with each function hanging off the type or off the instance
 
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RGBA {
     pub r: u8,
@@ -15,6 +17,16 @@ pub struct RGB {
     pub g: u8,
     pub b: u8,
 }
+
+pub enum Shape {
+    Circle { radius: u32 },
+    Square { side: u32 },
+}
+
+pub type CellSize<T> = PhysicalSize<T>;
+pub type CellPos<T> = PhysicalPosition<T>;
+pub type WindowSize<T> = PhysicalSize<T>;
+pub type WindowPosition<T> = PhysicalPosition<T>;
 
 impl RGBA {
     pub const fn as_u32(&self) -> u32 {

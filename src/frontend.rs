@@ -1,14 +1,10 @@
-use log::{info, trace};
-use winit::dpi::PhysicalSize;
-
-use crate::colours::RGB;
+use log::{info, trace, warn};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use crate::utils::{CellPos, Shape, WindowSize, RGB};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Material {
-    // Bedrock,
-    // Void,
-    // Sand,
     Dead,
     Alive,
 }
@@ -40,16 +36,17 @@ pub struct Frontend {
     pub start: Instant,
 
     pub sim_scale: u32,
+    pub window_size: PhysicalSize<u32>,
     pub sim_size: PhysicalSize<u32>,
     pub sim_buf: Vec<Cell>,
     pub sim_rgba_buf: Vec<u8>,
 }
 
 impl<'a> Frontend {
-    pub fn new(window_width: u32, window_height: u32, sim_scale: u32) -> Self {
-        assert!(window_width > 0 && window_height > 0 && sim_scale > 0);
+    pub fn new(w_size: WindowSize<u32>, sim_scale: u32) -> Self {
+        assert!(window.width > 0 && window.height > 0 && sim_scale > 0);
 
-        let sim_size = PhysicalSize::new(window_width / sim_scale, window_height / sim_scale);
+        let sim_size = PhysicalSize::new(window.width / sim_scale, window.height / sim_scale);
         let cell_count = (sim_size.width * sim_size.height) as usize;
 
         let sim_buf = vec![
@@ -69,6 +66,7 @@ impl<'a> Frontend {
         info!("Sim rgba buf len: {}", sim_rgba_buf.len());
 
         Self {
+            window_size: window,
             sim_size,
             sim_scale,
             sim_buf,
@@ -79,14 +77,11 @@ impl<'a> Frontend {
         }
     }
 
-    pub fn update(&mut self) {
-        self.timer = Instant::now();
-        self.frame += 1;
-    }
-
-    pub fn resize(&mut self, size: PhysicalSize<u32>) {
-        self.sim_size =
-            PhysicalSize::new(size.width / self.sim_scale, size.height / self.sim_scale);
+    pub fn resize(&mut self, window: WindowSize<u32>) {
+        self.sim_size = PhysicalSize::new(
+            window.width / self.sim_scale,
+            window.height / self.sim_scale,
+        );
         let cell_count = (self.sim_size.width * self.sim_size.height) as usize;
 
         self.sim_buf = vec![
@@ -106,6 +101,10 @@ impl<'a> Frontend {
         trace!("Frontend resized: {}", self.sim_rgba_buf.len());
     }
 
+    /*--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__
+                                              Utility Functions
+    --__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--*/
+
     pub fn get_sim_data(&self) -> SimData {
         SimData {
             rgba_buf: &self.sim_rgba_buf,
@@ -114,13 +113,121 @@ impl<'a> Frontend {
         }
     }
 
-    fn get_index(&self, x: u32, y: u32) -> usize {
-        (y * self.sim_size.width + x) as usize
+    #[inline]
+    fn get_index(&self, cell: CellPos<u32>) -> usize {
+        (cell.y * self.sim_size.width + cell.x) as usize
     }
 
-    fn update_cell(&mut self, x: u32, y: u32, material: Material) {
-        let index = self.get_index(x, y);
-        self.sim_buf[index] = Cell { material };
+    #[inline]
+    fn get_index_texture(&self, cell: CellPos<u32>) -> usize {
+        (4 * (cell.y * self.window_size.width + cell.x)) as usize
+    }
+
+    #[inline]
+    fn get_cell(&self, cell: CellPos<u32>) -> &Cell {
+        let index = self.get_index(cell);
+        if self.out_of_bounds(cell) {
+            panic!("Frontend.get_cell_mut oob: {cell:?}");
+        }
+        &self.sim_buf[index]
+    }
+
+    #[inline]
+    fn get_cell_mut(&mut self, cell: CellPos<u32>) -> &mut Cell {
+        let index = self.get_index(cell);
+        if self.out_of_bounds(x, y) {
+            panic!("Frontend.get_cell_mut oob: ({},{})", x, y);
+        }
+        &mut self.sim_buf[index]
+    }
+
+    #[inline]
+    fn update_cell(&mut self, pos: CellPos<u32> material: Material) {
+        self.get_cell_mut(pos).material = material;
+        self.update_rgba(x, y, material);
+    }
+
+    #[inline]
+    fn update_rgba(&mut self, x: u32, y: u32, material: Material) {
+        let rgba = material.get_rgb();
+        let index = self.get_index_texture(x, y);
+        // let index = (((y * self.sim_scale) * self.sim_size.width) + (x * self.sim_scale)) as usize;
+        self.sim_rgba_buf[index + 0] = rgba.r;
+        self.sim_rgba_buf[index + 1] = rgba.g;
+        self.sim_rgba_buf[index + 2] = rgba.b;
+    }
+
+    fn out_of_bounds(&self, x: u32, y: u32) -> bool {
+        x >= self.sim_size.width || y >= self.sim_size.height
+    }
+
+    // TODO(TOM): investigate why this is coincidentally only drawing to the top left quadrant of the screen.
+    pub fn draw(&mut self, shape: Shape, window_x: u32, window_y: u32) {
+        let x = window_x / self.sim_scale;
+        let y = window_y / self.sim_scale;
+        if self.out_of_bounds(x, y) {
+            warn!("Frontend.draw oob: ({},{})", x, y);
+            return;
+        }
+
+        match shape {
+            Shape::Circle { radius } => {
+                for y_off in -(radius as i32)..(radius as i32) {
+                    for x_off in -(radius as i32)..(radius as i32) {
+                        if x_off * x_off + y_off * y_off < (radius * radius) as i32 {
+                            self.update_cell(
+                                (x as i32 + x_off) as u32,
+                                (y as i32 + y_off) as u32,
+                                Material::Alive,
+                            );
+                        }
+                    }
+                }
+            }
+            Shape::Square { side } => {
+                for y_off in 0..side {
+                    for x_off in 0..side {
+                        self.update_cell(x + x_off, y + y_off, Material::Alive);
+                    }
+                }
+            }
+        }
+    }
+
+    /*--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__
+                                        Update the simulation state
+    --__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--*/
+
+    pub fn update(&mut self) {
+        self.timer = Instant::now();
+        self.frame += 1;
+
+        // Conway's game of life update routine.
+        // for y in 1..self.sim_size.height - 1 {
+        //     for x in 1..self.sim_size.width - 1 {
+        //         let mut alive_neighbours = 0;
+        //         for y_off in -1..1 {
+        //             for x_off in -1..1 {
+        //                 if y_off == 0 && x_off == 0 {
+        //                     continue;
+        //                 }
+
+        //                 alive_neighbours += self
+        //                     .get_cell((x as i32 + x_off) as u32, (y as i32 + y_off) as u32)
+        //                     .material as u32;
+        //             }
+        //         }
+
+        //         let cell = self.get_cell_mut(x, y);
+        //         if (alive_neighbours > 3 || alive_neighbours < 2)
+        //             && cell.material == Material::Alive
+        //         {
+        //             self.update_cell(x, y, Material::Dead);
+        //         } else if alive_neighbours == 3 && cell.material == Material::Dead {
+        //             self.update_cell(x, y, Material::Alive);
+        //         }
+        //     }
+        // }
     }
 }
 

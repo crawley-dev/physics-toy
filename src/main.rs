@@ -1,10 +1,12 @@
 #![feature(duration_millis_float)]
 #![allow(unused)]
 
+use utils::{WindowPosition, WindowSize};
+
 mod app;
-mod colours;
 mod engine;
 mod frontend;
+mod utils;
 
 pub const INIT_WIDTH: u32 = 800;
 pub const INIT_HEIGHT: u32 = 600;
@@ -20,7 +22,7 @@ fn main() {
     env_logger::init();
 
     // EventLoop & window init in main func because borrowing..
-    let (event_loop, window) = app::App::init(INIT_TITLE, INIT_WIDTH, INIT_HEIGHT);
+    let (event_loop, window) = app::App::init(INIT_TITLE, WindowSize::new(INIT_WIDTH, INIT_HEIGHT));
     let frontend = frontend::Frontend::new(INIT_WIDTH, INIT_HEIGHT, INIT_SCALE);
     let app = app::App::new(event_loop, &window, frontend);
 
