@@ -27,8 +27,8 @@ fn fs_main(@builtin(position) pixelCoord: vec4<f32>) -> @location(0) vec4<f32> {
     // Normalise coordinate to [0, 1] based on position in texture
     let uv = pixelCoord.xy / uniforms.texture_size; 
 
-    // let colour = random_colour(uv, uniforms.time);
-    let colour = textureSample(texture_data, texture_sampler, uv).xyz;
+    let colour = random_colour(uv, uniforms.time);
+    // let colour = textureSample(texture_data, texture_sampler, uv).xyz; // gets the color from the texture (44,44,44)
     return vec4<f32>(colour, 1.0);
 }
 

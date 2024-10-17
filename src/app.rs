@@ -48,22 +48,15 @@ impl<'a> App<'a> {
     pub fn run(mut self) {
         let mut last_frame_times = [0.0; TARGET_FPS as usize];
         let closure = |event: Event<()>, control_flow: &EventLoopWindowTarget<()>| {
-            // use self.engine.input.update(&event);
             match event {
                 Event::WindowEvent {
                     ref event,
                     window_id,
                 } if window_id == self.engine.window.id() => match event {
-                    WindowEvent::CloseRequested
-                    | WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                state: ElementState::Pressed,
-                                physical_key: PhysicalKey::Code(KeyCode::Escape),
-                                ..
-                            },
-                        ..
-                    } => control_flow.exit(),
+                    WindowEvent::CloseRequested => control_flow.exit(),
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        Self::handle_input(event, control_flow);
+                    }
                     WindowEvent::Resized(physical_size) => {
                         if self.engine.window.is_minimized().unwrap() {
                             return;
@@ -102,6 +95,25 @@ impl<'a> App<'a> {
         };
 
         self.event_loop.run(closure).unwrap()
+    }
+
+    fn handle_input(event: &KeyEvent, control_flow: &EventLoopWindowTarget<()>) {
+        if let KeyEvent {
+            state: ElementState::Pressed,
+            physical_key,
+            ..
+        } = event
+        {
+            match physical_key {
+                PhysicalKey::Code(KeyCode::Escape) => {
+                    control_flow.exit();
+                }
+                PhysicalKey::Code(_) => {}
+                PhysicalKey::Unidentified(_) => {
+                    info!("Unidentified key pressed.");
+                }
+            }
+        }
     }
 
     fn timing(timer: Instant, frame: u64, last_frame_times: &mut [f64; TARGET_FPS as usize]) {

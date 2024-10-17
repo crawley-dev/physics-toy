@@ -1,12 +1,10 @@
 use log::{error, info, trace, warn};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
-use winit_input_helper::WinitInputHelper;
 
 use crate::frontend::SimData;
 
 pub struct Engine<'a> {
-    input: WinitInputHelper,
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -262,7 +260,6 @@ impl<'a> Engine<'a> {
         info!("Bind Group created");
 
         Self {
-            input: WinitInputHelper::new(),
             surface,
             device,
             queue,
