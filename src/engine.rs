@@ -1,4 +1,5 @@
 use crate::frontend::SimData;
+use crate::utils::WindowSize;
 use log::{error, info, trace, warn};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -27,9 +28,10 @@ pub struct Engine<'a> {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GpuUniforms {
-    _padding: f32,
+    pub _padding: [f32; 3],
     pub time: f32,
     pub texture_size: [f32; 2],
+    pub window_size: [f32; 2],
 }
 
 unsafe impl bytemuck::Zeroable for GpuUniforms {}
@@ -215,17 +217,18 @@ impl<'a> Engine<'a> {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
         // Create a GPU buffer to hold time values, for shader code!
         let gpu_uniforms = GpuUniforms {
-            _padding: 0.0,
+            _padding: [0.0; 3],
             time: 0.0,
             texture_size: [texture_size.width as f32, texture_size.height as f32],
+            window_size: [window_size.width as f32, window_size.height as f32],
         };
         let gpu_data_buffer = wgpu::util::DeviceExt::create_buffer_init(
             &device,
@@ -352,6 +355,10 @@ impl<'a> Engine<'a> {
         self.config.height = self.window_size.height;
         self.surface.configure(&self.device, &self.config);
 
+        self.resize_texture(sim_data);
+    }
+
+    pub fn resize_texture(&mut self, sim_data: &SimData) {
         // create new texture
         self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("RGBA Texture"),
@@ -372,8 +379,16 @@ impl<'a> Engine<'a> {
             view_formats: &[],
         });
 
-        // update gpu data
-        self.gpu_uniforms.texture_size = [sim_data.size.width as f32, sim_data.size.height as f32];
+        // update gpu data, explicity naming every field to throw compile errors on new fields
+        self.gpu_uniforms = GpuUniforms {
+            _padding: self.gpu_uniforms._padding,
+            time: self.gpu_uniforms.time,
+            texture_size: [sim_data.size.width as f32, sim_data.size.height as f32],
+            window_size: [
+                self.window_size.width as f32,
+                self.window_size.height as f32,
+            ],
+        };
 
         // update binding group
         let texture_view = self

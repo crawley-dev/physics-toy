@@ -1,13 +1,23 @@
 struct Uniforms {
-    _padding: f32,
+    _padding: vec3<f32>,
     time: f32,
     texture_size: vec2<f32>,
+    window_size: vec2<f32>,
 }
 
 @group(0) @binding(0) var texture_sampler: sampler;
 @group(0) @binding(1) var texture_data: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> uniforms: Uniforms;
 
+struct VertexInput {
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
@@ -25,7 +35,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<
 @fragment
 fn fs_main(@builtin(position) pixelCoord: vec4<f32>) -> @location(0) vec4<f32> {
     // Normalise coordinate to [0, 1] based on position in texture
-    let uv = pixelCoord.xy / uniforms.texture_size; 
+    let uv = pixelCoord.xy / uniforms.window_size;
+    // texture_size 
 
     // let colour = random_colour(uv, uniforms.time);
     let colour = textureSample(texture_data, texture_sampler, uv).xyz; // gets the color from the texture (44,44,44)
