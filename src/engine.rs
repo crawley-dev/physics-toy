@@ -357,7 +357,6 @@ impl<'a> Engine<'a> {
 
         self.resize_texture(sim_data);
     }
-
     pub fn resize_texture(&mut self, sim_data: &SimData) {
         // create new texture
         self.texture = self.device.create_texture(&wgpu::TextureDescriptor {

@@ -96,7 +96,7 @@ impl<'a> App<'a> {
                             return;
                         }
 
-                        self.frontend.resize(WindowSize::from(*physical_size));
+                        self.frontend.resize_sim(WindowSize::from(*physical_size));
                         self.engine
                             .resize(*physical_size, &self.frontend.get_sim_data());
                     }
@@ -169,29 +169,32 @@ impl<'a> App<'a> {
 
         // Toggle simulation on KeySpace
         if inputs.keys_tapped[KeyCode::Space as usize] {
-            frontend.sim_running = !frontend.sim_running;
+            frontend.toggle_sim();
             info!("Toggled simulation: {}", frontend.sim_running);
+        } else if !frontend.sim_running && inputs.keys_tapped[KeyCode::ArrowRight as usize] {
+            // step simulation for one frame.
+            // then set sim to false again.
+            frontend.step_sim();
         }
 
         // Clear Application on KeyC
         if inputs.keys_tapped[KeyCode::KeyC as usize] {
-            frontend.clear();
+            frontend.clear_sim();
         }
-        // PROBLEM: on resize currently, texture is not being scaled to the screen, it is just shrinking.
-        // >> most likely due to UV coord not being mapped correctly.
-        // Scale Application on KeyPlus and KeyMinus
+
+        // Increase/Decrease Sim scale factor on KeyEqual/KeyMinus
         if inputs.keys_tapped[KeyCode::Minus as usize] {
             if frontend.sim_scale == 1 {
                 return;
             }
-            frontend.rescale(frontend.sim_scale - 1);
+            frontend.rescale_sim(frontend.sim_scale - 1);
             engine.resize_texture(&frontend.get_sim_data());
             info!("decreasing scale factor to {}", frontend.sim_scale,);
         } else if inputs.keys_tapped[KeyCode::Equal as usize] {
             if frontend.sim_scale == SIM_MAX_SCALE {
                 return;
             }
-            frontend.rescale(frontend.sim_scale + 1);
+            frontend.rescale_sim(frontend.sim_scale + 1);
             engine.resize_texture(&frontend.get_sim_data());
             info!("increasing scale factor to {}", frontend.sim_scale,);
         }

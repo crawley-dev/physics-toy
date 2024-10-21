@@ -1,6 +1,6 @@
 use crate::{
     app::InputData,
-    utils::{CellPos, CellSize, Shape, WindowPos, WindowSize, RGBA},
+    utils::{CellPos, CellSize, Shape, WindowPos, WindowSize, INIT_DRAW_SIZE, RGBA},
 };
 use log::{info, trace};
 use std::time::Instant;
@@ -12,7 +12,10 @@ enum Material {
 }
 
 impl Material {
-    pub const COLOURS: &'static [RGBA] = &[RGBA::from_rgb(44, 44, 44), RGBA::from_rgb(50, 255, 50)];
+    pub const COLOURS: &'static [RGBA] = &[
+        RGBA::from_rgb(44, 44, 44),  // Dead
+        RGBA::from_rgb(50, 255, 50), // Alive
+    ];
     pub const fn get_rgb(&self) -> RGBA {
         Material::COLOURS[*self as usize]
     }
@@ -38,6 +41,8 @@ pub struct Frontend {
 
     pub sim_scale: u32,
     pub sim_running: bool,
+    draw_size: u32,
+    step_sim: bool,
     window_size: WindowSize<u32>,
     sim_size: CellSize<u32>,
     sim_buf: Vec<Cell>,
@@ -73,6 +78,8 @@ impl<'a> Frontend {
             start: Instant::now(),
 
             sim_running: false,
+            step_sim: false,
+            draw_size: INIT_DRAW_SIZE,
             window_size: window,
             sim_size,
             sim_scale,
@@ -85,12 +92,12 @@ impl<'a> Frontend {
                                                 Big Functions
     --__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--*/
 
-    pub fn resize(&mut self, window: WindowSize<u32>) {
+    // TODO(TOM): resize from the centre of the screen, not the top left || from mouse cursor with scroll wheel.
+    pub fn resize_sim(&mut self, window: WindowSize<u32>) {
         let new_sim_size = window.to_cell(self.sim_scale);
         let cell_count = (new_sim_size.width * new_sim_size.height) as usize;
 
-        // TODO(TOM): if current buffer is big enough, map cells inline
-
+        // TODO(TOM): if current buffer is big enough, map cells inline << custom slice required.
         let mut new_sim_buf = Vec::with_capacity(cell_count);
         for y in 0..new_sim_size.height {
             for x in 0..new_sim_size.width {
@@ -119,12 +126,12 @@ impl<'a> Frontend {
         }
     }
 
-    pub fn rescale(&mut self, scale: u32) {
+    pub fn rescale_sim(&mut self, scale: u32) {
         self.sim_scale = scale;
-        self.resize(self.window_size);
+        self.resize_sim(self.window_size);
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear_sim(&mut self) {
         for y in 0..self.sim_size.height {
             for x in 0..self.sim_size.width {
                 self.update_cell(CellPos::new(x, y), Material::Dead);
@@ -186,6 +193,15 @@ impl<'a> Frontend {
         }
     }
 
+    pub fn toggle_sim(&mut self) {
+        self.sim_running = !self.sim_running;
+    }
+
+    pub fn step_sim(&mut self) {
+        self.step_sim = true;
+        info!("step sim");
+    }
+
     #[inline]
     fn get_index(&self, pos: CellPos<u32>) -> usize {
         (pos.y * self.sim_size.width + pos.x) as usize
@@ -240,41 +256,67 @@ impl<'a> Frontend {
     pub fn update(&mut self, _inputs: &mut InputData) {
         self.timer = Instant::now();
 
-        if self.sim_running {
+        if self.sim_running || self.step_sim {
             self.update_sim();
         }
 
+        self.step_sim = false;
         self.frame += 1;
     }
 
     fn update_sim(&mut self) {
         // Conway's game of life update routine.
+        let mut updates =
+            Vec::with_capacity(self.sim_size.width as usize * self.sim_size.height as usize);
+
         for y in 1..self.sim_size.height - 1 {
             for x in 1..self.sim_size.width - 1 {
                 let mut alive_neighbours = 0;
-                for y_off in -1i32..1 {
-                    for x_off in -1i32..1 {
-                        if y_off == 0 && x_off == 0 {
-                            continue;
-                        }
+                // for y_off in -1i32..1 {
+                //     for x_off in -1i32..1 {
+                //         if y_off == 0 && x_off == 0 {
+                //             continue;
+                //         }
 
-                        alive_neighbours += self
-                            .get_cell(CellPos::new(
-                                (x as i32 + x_off) as u32,
-                                (y as i32 + y_off) as u32,
-                            ))
-                            .material as u32;
+                //         let off_cell = self.get_cell(CellPos::new(
+                //             (x as i32 + x_off) as u32,
+                //             (y as i32 + y_off) as u32,
+                //         ));
+                //         alive_neighbours += (off_cell.material == Material::Alive) as u32;
+                //     }
+                // }
+                let origin_pos = CellPos::new(x, y);
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x - 1, y - 1)).material == Material::Alive) as u32;
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x, y - 1)).material == Material::Alive) as u32;
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x + 1, y - 1)).material == Material::Alive) as u32;
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x - 1, y)).material == Material::Alive) as u32;
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x + 1, y)).material == Material::Alive) as u32;
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x - 1, y + 1)).material == Material::Alive) as u32;
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x, y + 1)).material == Material::Alive) as u32;
+                alive_neighbours +=
+                    (self.get_cell(CellPos::new(x + 1, y + 1)).material == Material::Alive) as u32;
+
+                let cell_material = self.get_cell(origin_pos).material;
+                if cell_material == Material::Alive {
+                    if alive_neighbours != 2 && alive_neighbours != 3 {
+                        updates.push((origin_pos, Material::Dead));
+                    }
+                } else if cell_material == Material::Dead {
+                    if alive_neighbours == 3 {
+                        updates.push((origin_pos, Material::Alive));
                     }
                 }
-
-                // && cell.material == Material::Alive
-                // && cell.material == Material::Dead
-                if alive_neighbours > 3 || alive_neighbours < 2 {
-                    self.update_cell(CellPos::new(x, y), Material::Dead);
-                } else if alive_neighbours == 3 {
-                    self.update_cell(CellPos::new(x, y), Material::Alive);
-                }
             }
+        }
+        for (pos, material) in updates {
+            self.update_cell(pos, material);
         }
     }
 }

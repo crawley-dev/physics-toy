@@ -3,10 +3,11 @@
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-pub const KEY_COOLDOWN_MS: u64 = 500;
+pub const KEY_COOLDOWN_MS: u64 = 250;
 pub const INIT_WIDTH: u32 = 800;
 pub const INIT_HEIGHT: u32 = 600;
-pub const INIT_SCALE: u32 = 1;
+pub const INIT_SCALE: u32 = 8;
+pub const INIT_DRAW_SIZE: u32 = 10;
 pub const SIM_MAX_SCALE: u32 = 10;
 pub const TARGET_FPS: f64 = 144.0;
 pub const OUTPUT_EVERY_N_FRAMES: u64 = 30;
