@@ -41,7 +41,7 @@ pub struct Frontend {
     window_size: WindowSize<u32>,
     sim_size: CellSize<u32>,
     sim_buf: Vec<Cell>,
-    sim_rgba_buf: Vec<u8>,
+    sim_rgba_buf: Vec<u8>, // TODO(TOM): swap this out for a [u8] buffer.
 }
 
 impl<'a> Frontend {
@@ -90,9 +90,12 @@ impl<'a> Frontend {
         let cell_count = (new_sim_size.width * new_sim_size.height) as usize;
 
         // TODO(TOM): if current buffer is big enough, map cells inline
+
         let mut new_sim_buf = Vec::with_capacity(cell_count);
         for y in 0..new_sim_size.height {
             for x in 0..new_sim_size.width {
+                // if the coordinate is within the existing sim_space then copy the cell
+                // otherwise create a new dead cell.
                 if x >= self.sim_size.width || y >= self.sim_size.height {
                     new_sim_buf.push(Cell {
                         material: Material::Dead,
@@ -102,7 +105,18 @@ impl<'a> Frontend {
                 }
             }
         }
-        trace!("Frontend resized: {}", self.sim_rgba_buf.len());
+
+        self.sim_size = new_sim_size;
+        self.sim_buf = new_sim_buf;
+        self.sim_rgba_buf = vec![44; cell_count * 4];
+        for y in 0..self.sim_size.height {
+            for x in 0..self.sim_size.width {
+                self.update_rgba(
+                    CellPos::new(x, y),
+                    self.get_cell(CellPos::new(x, y)).material,
+                );
+            }
+        }
     }
 
     pub fn rescale(&mut self, scale: u32) {
@@ -163,6 +177,7 @@ impl<'a> Frontend {
     /*--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__
                                               Utility Functions
     --__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--__--*/
+    // TODO(TOM): adjacent functions using an index, not Pos<T>
 
     pub fn get_sim_data(&self) -> SimData {
         SimData {

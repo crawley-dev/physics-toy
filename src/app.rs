@@ -3,7 +3,7 @@ use crate::{
     frontend::Frontend,
     utils::{
         Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, OUTPUT_EVERY_N_FRAMES,
-        TARGET_FPS,
+        SIM_MAX_SCALE, TARGET_FPS,
     },
 };
 use log::{info, trace};
@@ -19,8 +19,10 @@ use winit::{
 
 pub struct InputData {
     pub mouse: WindowPos<u32>,
-    pub key_states: [bool; 256],
-    pub key_cooldowns: [Instant; 256],
+    // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
+    pub keys_held: [bool; 256],
+    pub keys_tapped: [bool; 256],
+    pub tap_cooldowns: [Instant; 256],
     pub mouse_down: bool,
 }
 
@@ -55,8 +57,9 @@ impl<'a> App<'a> {
             inputs: InputData {
                 mouse: WindowPos { x: 0, y: 0 },
                 mouse_down: false,
-                key_cooldowns: [Instant::now(); 256],
-                key_states: [false; 256],
+                keys_held: [false; 256],
+                keys_tapped: [false; 256],
+                tap_cooldowns: [Instant::now(); 256],
             },
         }
     }
@@ -138,20 +141,16 @@ impl<'a> App<'a> {
                 }
                 match event.state {
                     ElementState::Pressed => {
-                        if inputs.key_cooldowns[code].elapsed()
+                        if inputs.tap_cooldowns[code].elapsed()
                             > Duration::from_millis(KEY_COOLDOWN_MS)
                         {
-                            trace!(
-                                "{:?} > {:?}",
-                                inputs.key_cooldowns[code].elapsed(),
-                                Duration::from_millis(KEY_COOLDOWN_MS)
-                            );
-                            inputs.key_states[code] = true;
-                            inputs.key_cooldowns[code] = Instant::now();
+                            inputs.keys_held[code] = true;
+                            inputs.keys_tapped[code] = true;
+                            inputs.tap_cooldowns[code] = Instant::now();
                         }
                     }
                     ElementState::Released => {
-                        inputs.key_states[code] = false;
+                        inputs.keys_held[code] = false;
                     }
                 }
             }
@@ -159,56 +158,47 @@ impl<'a> App<'a> {
                 info!("Unidentified key pressed.");
             }
         }
-
-        // TODO(TOM): use delta time, not frame count
-        // update record of last pressed keys for pressed keys
-        // inputs
-        //     .key_states
-        //     .iter()
-        //     .enumerate()
-        //     .filter(|(_, k)| k == &&true)
-        //     .for_each(|(i, _)| {
-        //         if self.key_cooldowns[i] < KEY_COOLDOWN {
-        //             self.key_cooldowns[i] += 1;
-        //         } else {
-        //             self.key_cooldowns[i] = 0;
-        //         }
-        //     });
     }
 
+    // A centralised input handling function, calling upon engine and frontend calls.
     fn handle_inputs(frontend: &mut Frontend, engine: &mut Engine<'_>, inputs: &mut InputData) {
         // TODO(TOM): Interpolation, i.e bresenhams line algorithm
         if inputs.mouse_down {
             frontend.draw(Shape::Circle { radius: 5 }, inputs.mouse);
         }
 
-        if inputs.key_states[KeyCode::Space as usize] {
+        // Toggle simulation on KeySpace
+        if inputs.keys_tapped[KeyCode::Space as usize] {
             frontend.sim_running = !frontend.sim_running;
             info!("Toggled simulation: {}", frontend.sim_running);
-        } else if inputs.key_states[KeyCode::KeyC as usize] {
-            frontend.clear();
+        }
 
-        // TODO(TOM): this is happening because the key is being held down!!
-        //         >> only implement 500ms on key_down, it is true while down every fn call
-        //         >> FIX: clear key_states each frame, keep last_key_down.
-        //         >> FIX: store separate states for key_held, which will be true while key_down
-        } else if inputs.key_states[KeyCode::Minus as usize] {
-            frontend.rescale((frontend.sim_scale as i32 - 1i32).max(1) as u32);
+        // Clear Application on KeyC
+        if inputs.keys_tapped[KeyCode::KeyC as usize] {
+            frontend.clear();
+        }
+        // PROBLEM: on resize currently, texture is not being scaled to the screen, it is just shrinking.
+        // >> most likely due to UV coord not being mapped correctly.
+        // Scale Application on KeyPlus and KeyMinus
+        if inputs.keys_tapped[KeyCode::Minus as usize] {
+            if frontend.sim_scale == 1 {
+                return;
+            }
+            frontend.rescale(frontend.sim_scale - 1);
             engine.resize_texture(&frontend.get_sim_data());
-            info!(
-                "decreasing scale factor to {} {:?}",
-                frontend.sim_scale,
-                Instant::now()
-            );
-        } else if inputs.key_states[KeyCode::Equal as usize] {
+            info!("decreasing scale factor to {}", frontend.sim_scale,);
+        } else if inputs.keys_tapped[KeyCode::Equal as usize] {
+            if frontend.sim_scale == SIM_MAX_SCALE {
+                return;
+            }
             frontend.rescale(frontend.sim_scale + 1);
             engine.resize_texture(&frontend.get_sim_data());
-            info!(
-                "increasing scale factor to {}, {:?}",
-                frontend.sim_scale,
-                Instant::now(),
-            );
+            info!("increasing scale factor to {}", frontend.sim_scale,);
         }
+
+        // zero out inputs.keys_tapped each frame
+        // TODO(TOM): this is likely very inefficient, consider a better way to do this.
+        inputs.keys_tapped = [false; 256];
     }
 
     fn timing(timer: Instant, frame: u64, last_frame_times: &mut [f64; TARGET_FPS as usize]) {
