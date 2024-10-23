@@ -1,6 +1,6 @@
 use crate::{
-    engine::Engine,
-    frontend::Frontend,
+    backend::Backend,
+    frontend::{Frontend, SimData},
     utils::{
         Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, OUTPUT_EVERY_N_FRAMES,
         SIM_MAX_SCALE, TARGET_FPS,
@@ -26,15 +26,15 @@ pub struct InputData {
     pub mouse_down: bool,
 }
 
-pub struct App<'a> {
+pub struct App<'a, F: Frontend + 'a> {
     event_loop: EventLoop<()>,
-    frontend: Frontend,
-    engine: Engine<'a>,
+    frontend: F,
+    backend: Backend<'a>,
     inputs: InputData,
 }
 
-// https://sotrh.github.io/learn-wgpu/beginner/tutorial2-surface/#engine-new
-impl<'a> App<'a> {
+// https://sotrh.github.io/learn-wgpu/beginner/tutorial2-surface/#backend-new
+impl<'a, F: Frontend + 'a> App<'a, F> {
     pub fn init(title: &str, window_size: WindowSize<u32>) -> (EventLoop<()>, Window) {
         assert!(window_size.width > 0 && window_size.height > 0);
 
@@ -48,12 +48,13 @@ impl<'a> App<'a> {
         (event_loop, window)
     }
 
-    pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: Frontend) -> App<'a> {
-        let engine = pollster::block_on(Engine::new(window, &frontend.get_sim_data()));
+    pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: F) -> App<'a, F> {
+        let backend = pollster::block_on(Backend::new(&window, frontend.get_sim_data()));
+
         App {
             event_loop,
             frontend,
-            engine,
+            backend,
             inputs: InputData {
                 mouse: WindowPos { x: 0, y: 0 },
                 mouse_down: false,
@@ -71,12 +72,12 @@ impl<'a> App<'a> {
         self.event_loop
             .run(move |event, control_flow| match event {
                 Event::AboutToWait => {
-                    self.engine.window.request_redraw();
+                    self.backend.window.request_redraw();
                 }
                 Event::WindowEvent {
                     ref event,
                     window_id,
-                } if window_id == self.engine.window.id() => match event {
+                } if window_id == self.backend.window.id() => match event {
                     WindowEvent::CloseRequested => control_flow.exit(),
                     WindowEvent::KeyboardInput { event, .. } => {
                         Self::register_keyboard_input(event, &mut self.inputs, control_flow);
@@ -92,31 +93,30 @@ impl<'a> App<'a> {
                         self.inputs.mouse.y = position.y as u32;
                     }
                     WindowEvent::Resized(physical_size) => {
-                        if self.engine.window.is_minimized().unwrap() {
+                        if self.backend.window.is_minimized().unwrap() {
                             return;
                         }
 
                         self.frontend.resize_sim(WindowSize::from(*physical_size));
-                        self.engine
+                        self.backend
                             .resize(*physical_size, &self.frontend.get_sim_data());
                     }
-                    WindowEvent::RedrawRequested if window_id == self.engine.window.id() => {
-                        if self.engine.window.is_minimized().unwrap() {
+                    WindowEvent::RedrawRequested if window_id == self.backend.window.id() => {
+                        if self.backend.window.is_minimized().unwrap() {
                             return;
                         }
 
-                        Self::handle_inputs(&mut self.frontend, &mut self.engine, &mut self.inputs);
+                        Self::handle_inputs(
+                            &mut self.frontend,
+                            &mut self.backend,
+                            &mut self.inputs,
+                        );
                         self.frontend.update(&mut self.inputs);
-                        self.engine.render(
-                            &self.frontend.get_sim_data(),
-                            self.frontend.start.elapsed().as_millis_f32(),
-                        );
 
-                        Self::timing(
-                            self.frontend.timer,
-                            self.frontend.frame,
-                            &mut last_frame_times,
-                        );
+                        let sim_data = self.frontend.get_sim_data();
+                        self.backend.render(&sim_data);
+
+                        Self::timing(&sim_data, &mut last_frame_times);
                     }
                     _ => {}
                 },
@@ -160,8 +160,8 @@ impl<'a> App<'a> {
         }
     }
 
-    // A centralised input handling function, calling upon engine and frontend calls.
-    fn handle_inputs(frontend: &mut Frontend, engine: &mut Engine<'_>, inputs: &mut InputData) {
+    // A centralised input handling function, calling upon backend and frontend calls.
+    fn handle_inputs(frontend: &mut F, backend: &mut Backend<'_>, inputs: &mut InputData) {
         // TODO(TOM): Interpolation, i.e bresenhams line algorithm
         if inputs.mouse_down {
             frontend.draw(Shape::Circle { radius: 5 }, inputs.mouse);
@@ -170,8 +170,8 @@ impl<'a> App<'a> {
         // Toggle simulation on KeySpace
         if inputs.keys_tapped[KeyCode::Space as usize] {
             frontend.toggle_sim();
-            info!("Toggled simulation: {}", frontend.sim_running);
-        } else if !frontend.sim_running && inputs.keys_tapped[KeyCode::ArrowRight as usize] {
+            info!("Toggled simulation: {}", frontend.is_sim_running());
+        } else if !frontend.is_sim_running() && inputs.keys_tapped[KeyCode::ArrowRight as usize] {
             // step simulation for one frame.
             // then set sim to false again.
             frontend.step_sim();
@@ -184,19 +184,19 @@ impl<'a> App<'a> {
 
         // Increase/Decrease Sim scale factor on KeyEqual/KeyMinus
         if inputs.keys_tapped[KeyCode::Minus as usize] {
-            if frontend.sim_scale == 1 {
+            if frontend.get_scale() == 1 {
                 return;
             }
-            frontend.rescale_sim(frontend.sim_scale - 1);
-            engine.resize_texture(&frontend.get_sim_data());
-            info!("decreasing scale factor to {}", frontend.sim_scale,);
+            frontend.rescale_sim(frontend.get_scale() - 1);
+            backend.resize_texture(&frontend.get_sim_data());
+            info!("decreasing scale factor to {}", frontend.get_scale(),);
         } else if inputs.keys_tapped[KeyCode::Equal as usize] {
-            if frontend.sim_scale == SIM_MAX_SCALE {
+            if frontend.get_scale() == SIM_MAX_SCALE {
                 return;
             }
-            frontend.rescale_sim(frontend.sim_scale + 1);
-            engine.resize_texture(&frontend.get_sim_data());
-            info!("increasing scale factor to {}", frontend.sim_scale,);
+            frontend.rescale_sim(frontend.get_scale() + 1);
+            backend.resize_texture(&frontend.get_sim_data());
+            info!("increasing scale factor to {}", frontend.get_scale());
         }
 
         // zero out inputs.keys_tapped each frame
@@ -204,24 +204,26 @@ impl<'a> App<'a> {
         inputs.keys_tapped = [false; 256];
     }
 
-    fn timing(timer: Instant, frame: u64, last_frame_times: &mut [f64; TARGET_FPS as usize]) {
+    fn timing(sim_data: &SimData, last_frame_times: &mut [f64; TARGET_FPS as usize]) {
         // measure time taken to render current frame
         // sleep for remaining time "allotted" to this current frame
-        let remaining_frame_time =
-            (FRAME_TIME_MS - timer.elapsed().as_millis_f64()).clamp(0.0, FRAME_TIME_MS);
+        let elapsed = sim_data.timer.elapsed();
+        let remaining_frame_time = (FRAME_TIME_MS - elapsed.as_millis_f64()).max(0.0);
+
         std::thread::sleep(std::time::Duration::from_millis(
             remaining_frame_time as u64,
         ));
 
-        last_frame_times[frame as usize % TARGET_FPS as usize] = timer.elapsed().as_secs_f64();
+        last_frame_times[sim_data.frame as usize % TARGET_FPS as usize] = elapsed.as_secs_f64();
 
         // TODO(TOM): convert this to delta time, e.g. every 5 seconds.
-        if (frame as usize % OUTPUT_EVERY_N_FRAMES as usize) == 0 {
+        let div_five_remainder = sim_data.frame as usize % OUTPUT_EVERY_N_FRAMES as usize;
+        if div_five_remainder == 0 {
             trace!(
                 "Avg FPS: {:.2}",
                 1.0 / (last_frame_times.iter().sum::<f64>() / TARGET_FPS)
             );
         }
-        trace!("Frame time: {:#?}", timer.elapsed());
+        trace!("Frame time: {:#?}", elapsed);
     }
 }

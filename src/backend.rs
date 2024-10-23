@@ -4,7 +4,7 @@ use log::{error, info, trace, warn};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-pub struct Engine<'a> {
+pub struct Backend<'a> {
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -37,8 +37,8 @@ pub struct GpuUniforms {
 unsafe impl bytemuck::Zeroable for GpuUniforms {}
 unsafe impl bytemuck::Pod for GpuUniforms {}
 
-impl<'a> Engine<'a> {
-    pub async fn new(window: &'a Window, sim_data: &SimData<'_>) -> Self {
+impl<'a> Backend<'a> {
+    pub async fn new(window: &'a Window, sim_data: SimData<'_>) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             // TODO(TOM): if wasm, use GL.
@@ -124,7 +124,7 @@ impl<'a> Engine<'a> {
             // not supported on the WebGL2 backend.
             view_formats: &[],
         });
-        Self::update_texture(&queue, &texture, sim_data);
+        Self::update_texture(&queue, &texture, &sim_data);
         info!("Texture created, size: {:?}", texture.size());
 
         // >> Creating bind group layout <<
@@ -278,7 +278,8 @@ impl<'a> Engine<'a> {
         }
     }
 
-    pub fn render(&mut self, sim_data: &SimData, elapsed: f32) {
+    pub fn render(&mut self, sim_data: &SimData) {
+        let elapsed = sim_data.start.elapsed().as_millis_f32();
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             // can't gracefully exit in oom states
@@ -421,7 +422,7 @@ impl<'a> Engine<'a> {
 
         assert_eq!(tex_size.width, sim_data.size.width);
         assert_eq!(tex_size.height, sim_data.size.height);
-        assert_eq!(sim_data.rgba_buf.len(), computed_data_len);
+        assert_eq!(sim_data.texture_buf.len(), computed_data_len);
 
         queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -430,7 +431,7 @@ impl<'a> Engine<'a> {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            sim_data.rgba_buf,
+            sim_data.texture_buf,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * sim_data.size.width),

@@ -1,12 +1,16 @@
 #![feature(duration_millis_float)]
 #![allow(unused)]
 
-use utils::{WindowSize, INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
-
 mod app;
-mod engine;
+mod backend;
+mod cell_sim;
 mod frontend;
 mod utils;
+
+use crate::{app::App, cell_sim::CellSim};
+use backend::Backend;
+use frontend::Frontend;
+use utils::{WindowSize, INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
 
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
@@ -14,9 +18,12 @@ fn main() {
     env_logger::init();
 
     // EventLoop & window init in main func because borrowing..
-    let (event_loop, window) = app::App::init(INIT_TITLE, WindowSize::new(INIT_WIDTH, INIT_HEIGHT));
-    let frontend = frontend::Frontend::new(WindowSize::new(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
-    let app = app::App::new(event_loop, &window, frontend);
+    let frontend = CellSim::new(WindowSize::new(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
+
+    let (event_loop, window) =
+        App::<CellSim>::init(INIT_TITLE, WindowSize::new(INIT_WIDTH, INIT_HEIGHT));
+
+    let app = App::new(event_loop, &window, frontend);
 
     app.run();
 }

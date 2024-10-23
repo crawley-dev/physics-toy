@@ -113,7 +113,7 @@ pub struct RGBA {
 
 pub enum Shape {
     Circle { radius: u32 },
-    Square { side: u32 },
+    Square { side: u32, central: bool },
 }
 
 impl RGBA {
