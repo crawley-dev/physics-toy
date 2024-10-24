@@ -7,7 +7,10 @@ use crate::{
     },
 };
 use log::{info, trace};
-use std::time::{Duration, Instant};
+use std::{
+    mem::transmute,
+    time::{Duration, Instant},
+};
 use winit::{
     dpi::Size,
     event::{ElementState, KeyEvent, MouseButton},
@@ -21,9 +24,15 @@ pub struct InputData {
     pub mouse: WindowPos<u32>,
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
     pub keys_held: [bool; 256],
-    pub keys_tapped: [bool; 256],
+    pub keys_pressed: [bool; 256],
     pub tap_cooldowns: [Instant; 256],
     pub mouse_down: bool,
+}
+
+impl InputData {
+    pub fn is_pressed(&self, key: KeyCode) -> bool {
+        self.keys_pressed[key as usize]
+    }
 }
 
 pub struct App<'a, F: Frontend + 'a> {
@@ -49,7 +58,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
     }
 
     pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: F) -> App<'a, F> {
-        let backend = pollster::block_on(Backend::new(&window, frontend.get_sim_data()));
+        let backend = pollster::block_on(Backend::new(window, frontend.get_sim_data()));
 
         App {
             event_loop,
@@ -59,7 +68,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                 mouse: WindowPos { x: 0, y: 0 },
                 mouse_down: false,
                 keys_held: [false; 256],
-                keys_tapped: [false; 256],
+                keys_pressed: [false; 256],
                 tap_cooldowns: [Instant::now(); 256],
             },
         }
@@ -82,12 +91,13 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                     WindowEvent::KeyboardInput { event, .. } => {
                         Self::register_keyboard_input(event, &mut self.inputs, control_flow);
                     }
-                    WindowEvent::MouseInput { state, button, .. } => match button {
-                        MouseButton::Left => {
-                            self.inputs.mouse_down = *state == ElementState::Pressed;
-                        }
-                        _ => {}
-                    },
+                    WindowEvent::MouseInput {
+                        state,
+                        button: MouseButton::Left,
+                        ..
+                    } => {
+                        self.inputs.mouse_down = *state == ElementState::Pressed;
+                    }
                     WindowEvent::CursorMoved { position, .. } => {
                         self.inputs.mouse.x = position.x as u32;
                         self.inputs.mouse.y = position.y as u32;
@@ -145,7 +155,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             > Duration::from_millis(KEY_COOLDOWN_MS)
                         {
                             inputs.keys_held[code] = true;
-                            inputs.keys_tapped[code] = true;
+                            inputs.keys_pressed[code] = true;
                             inputs.tap_cooldowns[code] = Instant::now();
                         }
                     }
@@ -162,46 +172,54 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
 
     // A centralised input handling function, calling upon backend and frontend calls.
     fn handle_inputs(frontend: &mut F, backend: &mut Backend<'_>, inputs: &mut InputData) {
+        // TODO(TOM): the order of input handling will probably matter..
+
         // TODO(TOM): Interpolation, i.e bresenhams line algorithm
         if inputs.mouse_down {
-            frontend.draw(Shape::Circle { radius: 5 }, inputs.mouse);
+            frontend.draw(inputs.mouse);
         }
 
         // Toggle simulation on KeySpace
-        if inputs.keys_tapped[KeyCode::Space as usize] {
+        if inputs.is_pressed(KeyCode::Space) {
             frontend.toggle_sim();
-            info!("Toggled simulation: {}", frontend.is_sim_running());
-        } else if !frontend.is_sim_running() && inputs.keys_tapped[KeyCode::ArrowRight as usize] {
-            // step simulation for one frame.
-            // then set sim to false again.
+        } else if inputs.is_pressed(KeyCode::ArrowRight) && !frontend.is_sim_running() {
             frontend.step_sim();
         }
 
-        // Clear Application on KeyC
-        if inputs.keys_tapped[KeyCode::KeyC as usize] {
+        // Clear Sim on KeyC
+        if inputs.is_pressed(KeyCode::KeyC) {
             frontend.clear_sim();
         }
 
-        // Increase/Decrease Sim scale factor on KeyEqual/KeyMinus
-        if inputs.keys_tapped[KeyCode::Minus as usize] {
-            if frontend.get_scale() == 1 {
-                return;
-            }
+        // Scale factor on KeyPlus and KeyMinus
+        if inputs.is_pressed(KeyCode::Minus) && frontend.get_scale() > 1 {
             frontend.rescale_sim(frontend.get_scale() - 1);
             backend.resize_texture(&frontend.get_sim_data());
-            info!("decreasing scale factor to {}", frontend.get_scale(),);
-        } else if inputs.keys_tapped[KeyCode::Equal as usize] {
-            if frontend.get_scale() == SIM_MAX_SCALE {
-                return;
-            }
+        } else if inputs.is_pressed(KeyCode::Equal) && frontend.get_scale() < SIM_MAX_SCALE {
             frontend.rescale_sim(frontend.get_scale() + 1);
             backend.resize_texture(&frontend.get_sim_data());
-            info!("increasing scale factor to {}", frontend.get_scale());
+        }
+
+        // Draw Size on ArrowUp and ArrowDown
+        if inputs.is_pressed(KeyCode::ArrowUp) {
+            frontend.change_draw_size(1);
+        } else if inputs.is_pressed(KeyCode::ArrowDown) {
+            frontend.change_draw_size(-1);
+        }
+
+        // Cycle shape on Tab
+        if inputs.is_pressed(KeyCode::Tab) {
+            unsafe {
+                let shape = transmute::<u8, Shape>(
+                    (frontend.get_draw_shape() as u8 + 1) % Shape::Count as u8,
+                );
+                info!("{:?} => {:?}", frontend.get_draw_shape(), shape);
+                frontend.change_draw_shape(shape);
+            }
         }
 
         // zero out inputs.keys_tapped each frame
-        // TODO(TOM): this is likely very inefficient, consider a better way to do this.
-        inputs.keys_tapped = [false; 256];
+        inputs.keys_pressed = [false; 256];
     }
 
     fn timing(sim_data: &SimData, last_frame_times: &mut [f64; TARGET_FPS as usize]) {
@@ -217,8 +235,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         last_frame_times[sim_data.frame as usize % TARGET_FPS as usize] = elapsed.as_secs_f64();
 
         // TODO(TOM): convert this to delta time, e.g. every 5 seconds.
-        let div_five_remainder = sim_data.frame as usize % OUTPUT_EVERY_N_FRAMES as usize;
-        if div_five_remainder == 0 {
+        let remainder = sim_data.frame as usize % OUTPUT_EVERY_N_FRAMES as usize;
+        if remainder == 0 {
             trace!(
                 "Avg FPS: {:.2}",
                 1.0 / (last_frame_times.iter().sum::<f64>() / TARGET_FPS)

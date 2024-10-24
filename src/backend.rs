@@ -1,6 +1,5 @@
 use crate::frontend::SimData;
-use crate::utils::WindowSize;
-use log::{error, info, trace, warn};
+use log::{error, info, trace};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
@@ -342,7 +341,6 @@ impl<'a> Backend<'a> {
 
         // Drop render_pass' mutable reference to encoder, crashes otherwise.
         drop(render_pass);
-        trace!("Dropped render_pass");
 
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
@@ -358,6 +356,7 @@ impl<'a> Backend<'a> {
 
         self.resize_texture(sim_data);
     }
+
     pub fn resize_texture(&mut self, sim_data: &SimData) {
         // create new texture
         self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -422,7 +421,11 @@ impl<'a> Backend<'a> {
 
         assert_eq!(tex_size.width, sim_data.size.width);
         assert_eq!(tex_size.height, sim_data.size.height);
-        assert_eq!(sim_data.texture_buf.len(), computed_data_len);
+        assert_eq!(
+            sim_data.texture_buf.len(),
+            computed_data_len,
+            "{sim_data:#?}"
+        );
 
         queue.write_texture(
             wgpu::ImageCopyTexture {

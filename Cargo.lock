@@ -2173,6 +2173,7 @@ dependencies = [
  "num",
  "pollster",
  "rand",
+ "rayon",
  "soa-rs",
  "wgpu",
  "winit",

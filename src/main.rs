@@ -5,11 +5,10 @@ mod app;
 mod backend;
 mod cell_sim;
 mod frontend;
+mod gravity_sim;
 mod utils;
 
 use crate::{app::App, cell_sim::CellSim};
-use backend::Backend;
-use frontend::Frontend;
 use utils::{WindowSize, INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
 
 fn main() {
