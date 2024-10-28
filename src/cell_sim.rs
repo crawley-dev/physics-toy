@@ -41,16 +41,22 @@ pub struct Cell {
     to_material: Material,
 }
 
-pub struct CellSim {
+#[derive(Debug, Clone, Copy)]
+struct State {
     frame: u64,
-    start: Instant,
+    start: Instant, // TODO(TOM): INSTANT Type PANICS ON WASM
     frame_timer: Instant,
     draw_size: u32,
     draw_shape: Shape,
-    sim_scale: u32,
-    sim_running: bool,
+    scale: u32,
+    running: bool,
     step_sim: bool,
-    prev_mouse: WindowPos<f32>,
+    mouse: WindowPos<f32>,
+}
+
+pub struct CellSim {
+    state: State,
+    prev_state: State,
 
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
@@ -64,50 +70,50 @@ impl Frontend for CellSim {
         SimData {
             texture_buf: &self.texture_buf,
             size: self.sim_size,
-            frame: self.frame,
-            start: self.start,
-            frame_timer: self.frame_timer,
+            frame: self.state.frame,
+            start: self.state.start,
+            frame_timer: self.state.frame_timer,
         }
     }
 
     fn get_scale(&self) -> u32 {
-        self.sim_scale
+        self.state.scale
     }
 
     fn get_draw_shape(&self) -> Shape {
-        self.draw_shape
+        self.state.draw_shape
     }
 
     fn toggle_sim(&mut self) {
-        self.sim_running = !self.sim_running;
-        info!("Sim: {}", self.sim_running);
+        self.state.running = !self.state.running;
+        info!("Sim: {}", self.state.running);
     }
 
     fn step_sim(&mut self) {
-        self.step_sim = true;
+        self.state.step_sim = true;
         trace!("step sim");
     }
 
     fn is_sim_running(&self) -> bool {
-        self.sim_running
+        self.state.running
     }
     // endregion
     // region: Drawing
     fn change_draw_shape(&mut self, shape: Shape) {
-        info!("{:?} => {:?}", self.draw_shape, shape);
-        self.draw_shape = shape;
+        info!("{:?} => {:?}", self.state.draw_shape, shape);
+        self.state.draw_shape = shape;
     }
 
     fn change_draw_size(&mut self, delta: i32) {
-        self.draw_size = (self.draw_size as i32 + delta).max(1) as u32;
+        self.state.draw_size = (self.state.draw_size as i32 + delta).max(1) as u32;
     }
 
     fn draw(&mut self, pos: WindowPos<f32>) {
         // draw is already bounded by the window size, so no need to check bounds here.
-        let cell = pos.to_game(self.sim_scale as f32);
+        let cell = pos.to_game(self.state.scale as f32);
 
-        let draw_size = self.draw_size;
-        let draw_shape = self.draw_shape;
+        let draw_size = self.state.draw_size;
+        let draw_shape = self.state.draw_shape;
         let make_cell_alive_lambda = |off_x: i32, off_y: i32| {
             let off_pos = GamePos::new(
                 (cell.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32,
@@ -121,7 +127,7 @@ impl Frontend for CellSim {
     // region: Sim Manipulation
     // TODO(TOM): resize from the centre of the screen, not the top left || from mouse with scroll wheel.
     fn resize_sim(&mut self, window: WindowSize<u32>) {
-        let new_sim_size = window.to_game(self.sim_scale);
+        let new_sim_size = window.to_game(self.state.scale);
         if new_sim_size == self.sim_size {
             info!("Sim size unchanged, skipping resize. {new_sim_size:?}");
             return;
@@ -130,7 +136,7 @@ impl Frontend for CellSim {
         let cell_count = (new_sim_size.width * new_sim_size.height) as usize;
         trace!(
             "Resizing sim to: {new_sim_size:?} | {window:?} | scale: {} | {cell_count}",
-            self.sim_scale
+            self.state.scale
         );
 
         // TODO(TOM): if current buffer is big enough, map cells inline << custom slice required.
@@ -166,12 +172,12 @@ impl Frontend for CellSim {
     }
 
     fn rescale_sim(&mut self, scale: u32) {
-        if self.sim_scale == scale {
+        if self.state.scale == scale {
             info!("Sim scale unchanged, skipping rescale. {}", scale);
             return;
         }
         info!("New scale: {} | {:?}", scale, self.window_size);
-        self.sim_scale = scale;
+        self.state.scale = scale;
         self.resize_sim(self.window_size);
     }
 
@@ -185,29 +191,30 @@ impl Frontend for CellSim {
     // endregion
     // region: update
     fn update(&mut self, inputs: &mut InputData) {
-        self.frame_timer = Instant::now();
+        self.state.frame_timer = Instant::now();
+        self.state.mouse = inputs.mouse;
 
-        if self.sim_running || self.step_sim {
+        if self.state.running || self.state.step_sim {
             self.update_gol();
         }
-        self.render_mouse_outline(self.prev_mouse);
+        self.render_mouse_outline(self.prev_state.mouse);
         self.render_mouse_outline(inputs.mouse);
 
         // blinking draw outline
         // self.draw(inputs.mouse);
 
-        self.prev_mouse = inputs.mouse;
-        self.step_sim = false;
-        self.frame += 1;
+        self.prev_state = self.state;
+        self.state.step_sim = false;
+        self.state.frame += 1;
     }
     // endregion
 }
 
 impl CellSim {
-    pub fn new(window: WindowSize<u32>, sim_scale: u32) -> Self {
-        assert!(window.width > 0 && window.height > 0 && sim_scale > 0);
+    pub fn new(window: WindowSize<u32>, scale: u32) -> Self {
+        assert!(window.width > 0 && window.height > 0 && scale > 0);
 
-        let sim_size = window.to_game(sim_scale);
+        let sim_size = window.to_game(scale);
         let cell_count = (sim_size.width * sim_size.height) as usize;
 
         let sim_buf = vec![
@@ -228,19 +235,23 @@ impl CellSim {
         }
         info!("Sim rgba buf len: {}", texture_buf.len());
 
-        Self {
+        let state = State {
             frame: 0,
             frame_timer: Instant::now(),
             start: Instant::now(),
             draw_shape: Shape::CircleFill,
             draw_size: INIT_DRAW_SIZE,
-            sim_running: false,
+            running: false,
             step_sim: false,
-            prev_mouse: WindowPos::new(0.0, 0.0),
+            scale,
+            mouse: WindowPos::new(0.0, 0.0),
+        };
+        Self {
+            state,
+            prev_state: state,
 
             window_size: window,
             sim_size,
-            sim_scale,
             sim_buf,
             texture_buf,
         }
@@ -350,9 +361,9 @@ impl CellSim {
     }
 
     fn render_mouse_outline(&mut self, mouse: WindowPos<f32>) {
-        let mouse = mouse.to_game(self.sim_scale as f32);
+        let mouse = mouse.to_game(self.state.scale as f32);
 
-        Shape::CircleOutline.draw(self.draw_size, |off_x: i32, off_y: i32| {
+        Shape::CircleOutline.draw(self.state.draw_size, |off_x: i32, off_y: i32| {
             let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
             let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
             let index = 4 * (y * self.sim_size.width + x) as usize;

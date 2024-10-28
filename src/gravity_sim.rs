@@ -23,7 +23,7 @@ struct Particle {
 #[derive(Debug, Clone, Copy)]
 struct State {
     frame: u64,
-    start: Instant, // TODO(TOM): PANICS ON WASM
+    start: Instant, // TODO(TOM): INSTANT Type PANICS ON WASM
     frame_timer: Instant,
     draw_size: u32,
     draw_shape: Shape,
