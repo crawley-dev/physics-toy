@@ -8,7 +8,7 @@ mod frontend;
 mod gravity_sim;
 mod utils;
 
-use crate::{app::App, cell_sim::CellSim};
+use crate::{app::App, cell_sim::CellSim, gravity_sim::GravitySim};
 use utils::{WindowSize, INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
 
 fn main() {
@@ -17,10 +17,10 @@ fn main() {
     env_logger::init();
 
     // EventLoop & window init in main func because borrowing..
-    let frontend = CellSim::new(WindowSize::new(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
+    let frontend = GravitySim::new(WindowSize::new(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
 
     let (event_loop, window) =
-        App::<CellSim>::init(INIT_TITLE, WindowSize::new(INIT_WIDTH, INIT_HEIGHT));
+        App::<GravitySim>::init(INIT_TITLE, WindowSize::new(INIT_WIDTH, INIT_HEIGHT));
 
     let app = App::new(event_loop, &window, frontend);
 

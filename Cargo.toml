@@ -6,7 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-educe = "0.6.0"
 rand = "0.8.5"
 soa-rs = "0.7.2"
 winit = "0.29"
@@ -18,3 +17,8 @@ bytemuck = "1.19.0"
 image = "0.25.2"
 num = "0.4.3"
 rayon = "1.10.0"
+
+[dependencies.educe]
+version = "*"
+features = ["Debug"]
+default-features = false

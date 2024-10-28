@@ -3,7 +3,7 @@ use crate::{
     frontend::{Frontend, SimData},
     utils::{GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, INIT_DRAW_SIZE},
 };
-use log::{info, trace};
+use log::*;
 use rayon::prelude::*;
 use std::time::Instant;
 
@@ -44,13 +44,13 @@ pub struct Cell {
 pub struct CellSim {
     frame: u64,
     start: Instant,
-    timer: Instant,
+    frame_timer: Instant,
     draw_size: u32,
     draw_shape: Shape,
     sim_scale: u32,
     sim_running: bool,
     step_sim: bool,
-    prev_mouse: WindowPos<u32>,
+    prev_mouse: WindowPos<f32>,
 
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
@@ -66,7 +66,7 @@ impl Frontend for CellSim {
             size: self.sim_size,
             frame: self.frame,
             start: self.start,
-            timer: self.timer,
+            frame_timer: self.frame_timer,
         }
     }
 
@@ -93,17 +93,21 @@ impl Frontend for CellSim {
     }
     // endregion
     // region: Drawing
-    fn draw(&mut self, pos: WindowPos<u32>) {
-        let cell = pos.to_game(self.sim_scale);
-        trace!("Frontend.draw: {pos:?} => {cell:?}");
-        if self.out_of_bounds(cell) {
-            trace!("Frontend.draw oob: {cell:?}");
-            return;
-        }
+    fn change_draw_shape(&mut self, shape: Shape) {
+        info!("{:?} => {:?}", self.draw_shape, shape);
+        self.draw_shape = shape;
+    }
+
+    fn change_draw_size(&mut self, delta: i32) {
+        self.draw_size = (self.draw_size as i32 + delta).max(1) as u32;
+    }
+
+    fn draw(&mut self, pos: WindowPos<f32>) {
+        // draw is already bounded by the window size, so no need to check bounds here.
+        let cell = pos.to_game(self.sim_scale as f32);
 
         let draw_size = self.draw_size;
         let draw_shape = self.draw_shape;
-
         let make_cell_alive_lambda = |off_x: i32, off_y: i32| {
             let off_pos = GamePos::new(
                 (cell.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32,
@@ -111,20 +115,11 @@ impl Frontend for CellSim {
             );
             self.update_cell(off_pos, Material::Alive);
         };
-        Self::draw_generic(draw_shape, draw_size, make_cell_alive_lambda)
-    }
-
-    fn change_draw_shape(&mut self, shape: Shape) {
-        self.draw_shape = shape;
-    }
-
-    fn change_draw_size(&mut self, delta: i32) {
-        self.draw_size = (self.draw_size as i32 + delta).max(1) as u32;
-        info!("Draw size: {}", self.draw_size);
+        draw_shape.draw(draw_size, make_cell_alive_lambda)
     }
     // endregion
     // region: Sim Manipulation
-    // TODO(TOM): resize from the centre of the screen, not the top left || from mouse cursor with scroll wheel.
+    // TODO(TOM): resize from the centre of the screen, not the top left || from mouse with scroll wheel.
     fn resize_sim(&mut self, window: WindowSize<u32>) {
         let new_sim_size = window.to_game(self.sim_scale);
         if new_sim_size == self.sim_size {
@@ -190,11 +185,13 @@ impl Frontend for CellSim {
     // endregion
     // region: update
     fn update(&mut self, inputs: &mut InputData) {
-        self.timer = Instant::now();
+        self.frame_timer = Instant::now();
 
         if self.sim_running || self.step_sim {
             self.update_gol();
         }
+        self.render_mouse_outline(self.prev_mouse);
+        self.render_mouse_outline(inputs.mouse);
 
         // blinking draw outline
         // self.draw(inputs.mouse);
@@ -233,13 +230,13 @@ impl CellSim {
 
         Self {
             frame: 0,
-            timer: Instant::now(),
+            frame_timer: Instant::now(),
             start: Instant::now(),
             draw_shape: Shape::CircleFill,
             draw_size: INIT_DRAW_SIZE,
             sim_running: false,
             step_sim: false,
-            prev_mouse: WindowPos::new(0, 0),
+            prev_mouse: WindowPos::new(0.0, 0.0),
 
             window_size: window,
             sim_size,
@@ -248,65 +245,6 @@ impl CellSim {
             texture_buf,
         }
     }
-
-    // region: Drawing
-    pub fn draw_generic<F: FnMut(i32, i32)>(shape: Shape, size: u32, mut lambda: F) {
-        match shape {
-            Shape::CircleOutline => {
-                let mut x = 0;
-                let mut y = size as i32;
-                let mut d = 3 - 2 * size as i32;
-                let mut draw_circle = |x, y| {
-                    lambda(x, y);
-                    lambda(-x, y);
-                    lambda(x, -y);
-                    lambda(-x, -y);
-                    lambda(y, x);
-                    lambda(-y, x);
-                    lambda(y, -x);
-                    lambda(-y, -x);
-                };
-                draw_circle(x, y);
-                while x < y {
-                    if d < 0 {
-                        d = d + 4 * x + 6;
-                    } else {
-                        y -= 1;
-                        d = d + 4 * (x - y) + 10;
-                    }
-                    x += 1;
-                    draw_circle(x, y);
-                }
-            }
-            Shape::CircleFill => {
-                let r2 = size as i32 * size as i32;
-                let area = r2 << 2;
-                let rr = (size as i32) << 1;
-
-                for i in 0..area {
-                    let tx = (i % rr) - size as i32;
-                    let ty = (i / rr) - size as i32;
-
-                    if tx * tx + ty * ty <= r2 {
-                        lambda(tx, ty);
-                    }
-                }
-            }
-            Shape::SquareCentered => {
-                let half = (size / 2) as i32;
-                for y_off in -(half)..(half) {
-                    for x_off in -(half)..(half) {
-                        lambda(x_off, y_off);
-                    }
-                }
-            }
-            Shape::Count => {
-                panic!("Shape::Count is not a valid shape");
-            }
-        }
-    }
-
-    // endregion
     // region: Utility
     // TODO(TOM): adjacent  using an index, not Pos<T>
 
@@ -363,9 +301,7 @@ impl CellSim {
     // region: Update
     // TODO(TOM): convert to a delta checker/updater (check all alive cells and their neighbours)
     fn update_gol(&mut self) {
-        // Conway's game of life update routine.
-
-        for y in (1..self.sim_size.height - 1) {
+        for y in 1..self.sim_size.height - 1 {
             for x in 1..self.sim_size.width - 1 {
                 let mut neighbours = 0;
                 if x == 0 || y == 0 || x == self.sim_size.width - 1 || y == self.sim_size.height - 1
@@ -402,7 +338,7 @@ impl CellSim {
             }
         }
 
-        for y in (1..self.sim_size.height - 1) {
+        for y in 1..self.sim_size.height - 1 {
             for x in 1..self.sim_size.width - 1 {
                 let c = self.get_cell_mut(GamePos::new(x, y));
                 if c.updated {
@@ -411,6 +347,19 @@ impl CellSim {
                 }
             }
         }
+    }
+
+    fn render_mouse_outline(&mut self, mouse: WindowPos<f32>) {
+        let mouse = mouse.to_game(self.sim_scale as f32);
+
+        Shape::CircleOutline.draw(self.draw_size, |off_x: i32, off_y: i32| {
+            let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
+            let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
+            let index = 4 * (y * self.sim_size.width + x) as usize;
+            self.texture_buf[index] = 255;
+            self.texture_buf[index + 1] = 255;
+            self.texture_buf[index + 2] = 255;
+        });
     }
     // endregion
 }

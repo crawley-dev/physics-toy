@@ -2,11 +2,10 @@ use crate::{
     backend::Backend,
     frontend::{Frontend, SimData},
     utils::{
-        Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, OUTPUT_EVERY_N_FRAMES,
-        SIM_MAX_SCALE, TARGET_FPS,
+        Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, SIM_MAX_SCALE, TARGET_FPS,
     },
 };
-use log::{info, trace};
+use log::*;
 use std::{
     mem::transmute,
     time::{Duration, Instant},
@@ -21,7 +20,7 @@ use winit::{
 };
 
 pub struct InputData {
-    pub mouse: WindowPos<u32>,
+    pub mouse: WindowPos<f32>,
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
     pub keys_held: [bool; 256],
     pub keys_pressed: [bool; 256],
@@ -65,7 +64,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             frontend,
             backend,
             inputs: InputData {
-                mouse: WindowPos { x: 0, y: 0 },
+                mouse: WindowPos { x: 0.0, y: 0.0 },
                 mouse_down: false,
                 keys_held: [false; 256],
                 keys_pressed: [false; 256],
@@ -78,6 +77,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
 
     pub fn run(mut self) {
         let mut last_frame_times = [0.0; TARGET_FPS as usize];
+        let mut n_frame_timer = Instant::now();
         self.event_loop
             .run(move |event, control_flow| match event {
                 Event::AboutToWait => {
@@ -99,8 +99,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                         self.inputs.mouse_down = *state == ElementState::Pressed;
                     }
                     WindowEvent::CursorMoved { position, .. } => {
-                        self.inputs.mouse.x = position.x as u32;
-                        self.inputs.mouse.y = position.y as u32;
+                        self.inputs.mouse.x = position.x as f32;
+                        self.inputs.mouse.y = position.y as f32;
                     }
                     WindowEvent::Resized(physical_size) => {
                         if self.backend.window.is_minimized().unwrap() {
@@ -126,7 +126,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                         let sim_data = self.frontend.get_sim_data();
                         self.backend.render(&sim_data);
 
-                        Self::timing(&sim_data, &mut last_frame_times);
+                        Self::timing(&sim_data, &mut last_frame_times, &mut n_frame_timer);
                     }
                     _ => {}
                 },
@@ -165,7 +165,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                 }
             }
             PhysicalKey::Unidentified(_) => {
-                info!("Unidentified key pressed.");
+                warn!("Unidentified key pressed.");
             }
         }
     }
@@ -213,7 +213,6 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                 let shape = transmute::<u8, Shape>(
                     (frontend.get_draw_shape() as u8 + 1) % Shape::Count as u8,
                 );
-                info!("{:?} => {:?}", frontend.get_draw_shape(), shape);
                 frontend.change_draw_shape(shape);
             }
         }
@@ -222,26 +221,33 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         inputs.keys_pressed = [false; 256];
     }
 
-    fn timing(sim_data: &SimData, last_frame_times: &mut [f64; TARGET_FPS as usize]) {
+    fn timing(
+        sim_data: &SimData,
+        last_frame_times: &mut [f64; TARGET_FPS as usize],
+        n_frame_timer: &mut Instant,
+    ) {
         // measure time taken to render current frame
         // sleep for remaining time "allotted" to this current frame
-        let elapsed = sim_data.timer.elapsed();
+        let elapsed = sim_data.frame_timer.elapsed();
         let remaining_frame_time = (FRAME_TIME_MS - elapsed.as_millis_f64()).max(0.0);
 
         std::thread::sleep(std::time::Duration::from_millis(
             remaining_frame_time as u64,
         ));
 
+        // If reached end of last_frame_times, reset n_frame_timer
+        if sim_data.frame % TARGET_FPS as u64 == 0 {
+            *n_frame_timer = Instant::now();
+        }
         last_frame_times[sim_data.frame as usize % TARGET_FPS as usize] = elapsed.as_secs_f64();
 
-        // TODO(TOM): convert this to delta time, e.g. every 5 seconds.
-        let remainder = sim_data.frame as usize % OUTPUT_EVERY_N_FRAMES as usize;
-        if remainder == 0 {
-            trace!(
-                "Avg FPS: {:.2}",
-                1.0 / (last_frame_times.iter().sum::<f64>() / TARGET_FPS)
+        if sim_data.frame % TARGET_FPS as u64 == TARGET_FPS as u64 - 1 {
+            let avg_frame_time = n_frame_timer.elapsed().div_f64(TARGET_FPS);
+            trace!("Avg Frame time: {avg_frame_time:?}",);
+            info!(
+                "FPS: {:?}",
+                Duration::from_secs(1).div_duration_f64(avg_frame_time)
             );
         }
-        trace!("Frame time: {:#?}", elapsed);
     }
 }

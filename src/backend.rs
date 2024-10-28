@@ -1,5 +1,5 @@
 use crate::frontend::SimData;
-use log::{error, info, trace};
+use log::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
