@@ -20,16 +20,22 @@ struct Particle {
     radius: f32,
 }
 
-pub struct GravitySim {
+#[derive(Debug, Clone, Copy)]
+struct State {
     frame: u64,
     start: Instant, // TODO(TOM): PANICS ON WASM
     frame_timer: Instant,
     draw_size: u32,
     draw_shape: Shape,
-    sim_scale: u32,
-    sim_running: bool,
+    scale: u32,
+    running: bool,
     step_sim: bool,
-    prev_mouse: WindowPos<f32>,
+    mouse: WindowPos<f32>,
+}
+
+pub struct GravitySim {
+    state: State,
+    prev_state: State,
 
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
@@ -44,48 +50,49 @@ impl Frontend for GravitySim {
         SimData {
             texture_buf: &self.texture_buf,
             size: self.sim_size,
-            frame: self.frame,
-            start: self.start,
-            frame_timer: self.frame_timer,
+            frame: self.state.frame,
+            start: self.state.start,
+            frame_timer: self.state.frame_timer,
         }
     }
 
     fn get_scale(&self) -> u32 {
-        self.sim_scale
+        self.state.scale
     }
 
     fn get_draw_shape(&self) -> Shape {
-        self.draw_shape
+        self.state.draw_shape
     }
 
     fn toggle_sim(&mut self) {
-        self.sim_running = !self.sim_running;
-        info!("Sim running: {}", self.sim_running);
+        self.state.running = !self.state.running;
+        info!("Sim running: {}", self.state.running);
     }
 
     fn step_sim(&mut self) {
-        self.step_sim = true;
+        self.state.step_sim = true;
     }
 
     fn is_sim_running(&self) -> bool {
-        self.sim_running
+        self.state.running
     }
     // endregion
     // region: Drawing
     fn change_draw_shape(&mut self, shape: Shape) {
-        info!("{:?} => {:?}", self.draw_shape, shape);
-        self.draw_shape = shape;
+        info!("{:?} => {:?}", self.state.draw_shape, shape);
+        self.state.draw_shape = shape;
     }
 
     fn change_draw_size(&mut self, delta: i32) {
-        self.draw_size = (self.draw_size as i32 + delta).max(1) as u32;
+        self.state.draw_size = (self.state.draw_size as i32 + delta).max(1) as u32;
     }
 
     fn draw(&mut self, mouse: WindowPos<f32>) {
         // draw is already bounded by the window size, so no need to check bounds here.
-        let game = mouse.to_game(self.sim_scale as f32);
-        self.draw_shape
-            .draw(self.draw_size, |off_x: i32, off_y: i32| {
+        let game = mouse.to_game(self.state.scale as f32);
+        self.state
+            .draw_shape
+            .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
                 // TODO(TOM): calc area/draw calls, pre-alloc them
                 self.particles.push(Particle {
                     pos: GamePos::new(game.x as f32 + off_x as f32, game.y as f32 + off_y as f32),
@@ -98,7 +105,7 @@ impl Frontend for GravitySim {
     // endregion
     // region: Sim Manipultion
     fn resize_sim(&mut self, window: WindowSize<u32>) {
-        let new_sim_size = window.to_game(self.sim_scale);
+        let new_sim_size = window.to_game(self.state.scale);
         if new_sim_size == self.sim_size {
             info!("Sim size unchanged, skipping resize. {new_sim_size:?}");
             return;
@@ -108,7 +115,7 @@ impl Frontend for GravitySim {
         let new_sim_buf = vec![44; cell_count * 4];
         trace!(
             "Resizing sim to: {new_sim_size:?} | {window:?} | scale: {} | {cell_count}",
-            self.sim_scale
+            self.state.scale
         );
 
         self.window_size = window;
@@ -118,7 +125,7 @@ impl Frontend for GravitySim {
     }
 
     fn rescale_sim(&mut self, new_scale: u32) {
-        self.sim_scale = new_scale;
+        self.state.scale = new_scale;
         self.resize_sim(self.window_size);
     }
 
@@ -128,39 +135,53 @@ impl Frontend for GravitySim {
     // endregion
     // region: Update
     fn update(&mut self, inputs: &mut InputData) {
-        self.frame_timer = Instant::now();
+        self.state.frame_timer = Instant::now();
+        self.state.mouse = inputs.mouse;
 
-        // if inputs.is_pressed(KeyCode::KeyW) {
-        //     self.camera.y -= 1.0;
-        // } else if inputs.is_pressed(KeyCode::KeyS) {
-        //     self.camera.y += 1.0;
-        // }
-        // if inputs.is_pressed(KeyCode::KeyA) {
-        //     self.camera.x -= 1.0;
-        // } else if inputs.is_pressed(KeyCode::KeyD) {
-        //     self.camera.x += 1.0;
-        // }
+        if inputs.is_pressed(KeyCode::KeyW) {
+            self.camera.y -= 1.0;
+        } else if inputs.is_pressed(KeyCode::KeyS) {
+            self.camera.y += 1.0;
+        }
+        if inputs.is_pressed(KeyCode::KeyA) {
+            self.camera.x -= 1.0;
+        } else if inputs.is_pressed(KeyCode::KeyD) {
+            self.camera.x += 1.0;
+        }
 
-        let mut prev_mouse = self.prev_mouse.to_game(self.sim_scale as f32);
+        let mut prev_mouse = self.prev_state.mouse.to_game(self.state.scale as f32);
         prev_mouse.x -= self.camera.x; // Normalise cursor position to viewport
         prev_mouse.y -= self.camera.y;
-        let mut mouse = inputs.mouse.to_game(self.sim_scale as f32);
+        let mut mouse = self.state.mouse.to_game(self.state.scale as f32);
         mouse.x -= self.camera.x; // Normalise cursor position to viewport
         mouse.y -= self.camera.y;
 
-        if self.sim_running || self.step_sim {
+        if self.state.running || self.state.step_sim {
             self.texture_buf.iter_mut().for_each(|p| *p = 44);
-            self.render_particles();
             self.update_sim(mouse);
-            self.render_particles();
         }
 
-        self.render_mouse_outline(prev_mouse, Rgba::from_rgb(44, 44, 44)); // clear old outline
-        self.render_mouse_outline(mouse, Rgba::from_rgb(40, 255, 40));
+        // TODO(TOM): render_mouse_outline should draw what the cursor was covering up, then
+        // render_particles() can be called conditionally.
+        self.render_particles(); // render unconditionally so cursor doesn't wipe out particles
 
-        self.prev_mouse = inputs.mouse;
-        self.step_sim = false;
-        self.frame += 1;
+        // TODO(TOM): on shape change, wipe old shape clear, draw new shape
+        self.render_mouse_outline(
+            prev_mouse,
+            self.prev_state.draw_shape,
+            self.prev_state.draw_size,
+            Rgba::from_rgb(44, 44, 44),
+        );
+        self.render_mouse_outline(
+            mouse,
+            self.state.draw_shape,
+            self.state.draw_size,
+            Rgba::from_rgb(40, 255, 40),
+        );
+
+        self.prev_state = self.state;
+        self.state.step_sim = false;
+        self.state.frame += 1;
     }
     // endregion
 }
@@ -178,16 +199,20 @@ impl GravitySim {
         // }
 
         let sim_size = size.to_game(scale);
-        Self {
+        let state = State {
             frame: 0,
             start: Instant::now(),
             frame_timer: Instant::now(),
             draw_size: INIT_DRAW_SIZE,
             draw_shape: Shape::CircleFill,
-            sim_scale: scale,
-            sim_running: false,
+            scale: scale,
+            running: false,
             step_sim: false,
-            prev_mouse: WindowPos::new(0.0, 0.0),
+            mouse: WindowPos::new(0.0, 0.0),
+        };
+        Self {
+            state,
+            prev_state: state,
 
             window_size: size,
             sim_size,
@@ -260,16 +285,15 @@ impl GravitySim {
         }
     }
 
-    fn render_mouse_outline(&mut self, mouse: GamePos<f32>, colour: Rgba) {
+    fn render_mouse_outline(&mut self, mouse: GamePos<f32>, shape: Shape, size: u32, colour: Rgba) {
         //TODO(TOM): not properly clearing mouse outline on size change
-        self.draw_shape
-            .draw(self.draw_size, |off_x: i32, off_y: i32| {
-                let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
-                let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
-                let index = 4 * (y * self.sim_size.width + x) as usize;
-                self.texture_buf[index] = colour.r;
-                self.texture_buf[index + 1] = colour.g;
-                self.texture_buf[index + 2] = colour.b;
-            });
+        shape.draw(size, |off_x: i32, off_y: i32| {
+            let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
+            let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
+            let index = 4 * (y * self.sim_size.width + x) as usize;
+            self.texture_buf[index] = colour.r;
+            self.texture_buf[index + 1] = colour.g;
+            self.texture_buf[index + 2] = colour.b;
+        });
     }
 }

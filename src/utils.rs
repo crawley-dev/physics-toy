@@ -138,17 +138,43 @@ impl Shape {
                 }
             }
             Shape::CircleFill => {
-                let r2 = size as i32 * size as i32;
-                let area = r2 << 2;
-                let rr = (size as i32) << 1;
+                // TODO(TOM): this is really inaccurate
+                // let r2 = size as i32 * size as i32;
+                // let area = r2 << 2;
+                // let rr = (size as i32) << 1;
 
-                for i in 0..area {
-                    let tx = (i % rr) - size as i32;
-                    let ty = (i / rr) - size as i32;
+                // for i in 0..area {
+                //     let tx = (i % rr) - size as i32;
+                //     let ty = (i / rr) - size as i32;
 
-                    if tx * tx + ty * ty <= r2 {
-                        lambda(tx, ty);
+                //     if tx * tx + ty * ty <= r2 {
+                //         lambda(tx, ty);
+                //     }
+                // }
+                let mut x = 0;
+                let mut y = size as i32;
+                let mut d = 3 - 2 * size as i32;
+                let mut draw_line = |x1, x2, y| {
+                    for x in x1..x2 {
+                        lambda(x, y);
                     }
+                };
+                let mut draw_circle = |x: i32, y: i32| {
+                    draw_line(-x, x, y);
+                    draw_line(-x, x, -y);
+                    draw_line(-y, y, x);
+                    draw_line(-y, y, -x);
+                };
+                draw_circle(x, y);
+                while x < y {
+                    if d < 0 {
+                        d = d + 4 * x + 6;
+                    } else {
+                        y -= 1;
+                        d = d + 4 * (x - y) + 10;
+                    }
+                    x += 1;
+                    draw_circle(x, y);
                 }
             }
             Shape::SquareCentered => {
