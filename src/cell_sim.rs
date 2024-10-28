@@ -6,6 +6,7 @@ use crate::{
 use log::*;
 use rayon::prelude::*;
 use std::time::Instant;
+use winit::dpi::PhysicalPosition;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Material {
@@ -51,7 +52,7 @@ struct State {
     scale: u32,
     running: bool,
     step_sim: bool,
-    mouse: WindowPos<f32>,
+    mouse: WindowPos<f64>,
 }
 
 pub struct CellSim {
@@ -108,18 +109,25 @@ impl Frontend for CellSim {
         self.state.draw_size = (self.state.draw_size as i32 + delta).max(1) as u32;
     }
 
-    fn draw(&mut self, pos: WindowPos<f32>) {
+    fn draw(&mut self, pos: WindowPos<f64>) {
         // draw is already bounded by the window size, so no need to check bounds here.
-        let cell = pos.to_game(self.state.scale as f32);
+        let cell = pos.to_game(self.state.scale as f64);
 
         let draw_size = self.state.draw_size;
         let draw_shape = self.state.draw_shape;
         let make_cell_alive_lambda = |off_x: i32, off_y: i32| {
-            let off_pos = GamePos::new(
-                (cell.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32,
-                (cell.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32,
+            // let off_pos = GamePos::new(
+            //     (cell.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32,
+            //     (cell.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32,
+            // );
+            let off_pos = cell.add(off_x, off_y).clamp(
+                0.0,
+                0.0,
+                (self.sim_size.width - 1) as f64,
+                (self.sim_size.height - 1) as f64,
             );
-            self.update_cell(off_pos, Material::Alive);
+            let off_pos_u32 = (off_pos.x as u32, off_pos.y as u32).into();
+            self.update_cell(off_pos_u32, Material::Alive);
         };
         draw_shape.draw(draw_size, make_cell_alive_lambda)
     }
@@ -152,7 +160,7 @@ impl Frontend for CellSim {
                         to_material: Material::Alive,
                     });
                 } else {
-                    new_sim_buf.push(self.sim_buf[self.get_index(GamePos::new(x, y))]);
+                    new_sim_buf.push(self.sim_buf[self.get_index((x, y).into())]);
                 }
             }
         }
@@ -163,10 +171,7 @@ impl Frontend for CellSim {
         self.texture_buf = vec![44; cell_count * 4];
         for y in 0..self.sim_size.height {
             for x in 0..self.sim_size.width {
-                self.update_rgba(
-                    GamePos::new(x, y),
-                    self.get_cell(GamePos::new(x, y)).material,
-                );
+                self.update_rgba((x, y).into(), self.get_cell((x, y).into()).material);
             }
         }
     }
@@ -184,7 +189,7 @@ impl Frontend for CellSim {
     fn clear_sim(&mut self) {
         for y in 0..self.sim_size.height {
             for x in 0..self.sim_size.width {
-                self.update_cell(GamePos::new(x, y), Material::Dead);
+                self.update_cell((x, y).into(), Material::Dead);
             }
         }
     }
@@ -244,7 +249,7 @@ impl CellSim {
             running: false,
             step_sim: false,
             scale,
-            mouse: WindowPos::new(0.0, 0.0),
+            mouse: (0.0, 0.0).into(),
         };
         Self {
             state,
@@ -321,23 +326,19 @@ impl CellSim {
                 }
 
                 neighbours +=
-                    (self.get_cell(GamePos::new(x - 1, y - 1)).material == Material::Alive) as u32;
+                    (self.get_cell((x - 1, y - 1).into()).material == Material::Alive) as u32;
+                neighbours += (self.get_cell((x, y - 1).into()).material == Material::Alive) as u32;
                 neighbours +=
-                    (self.get_cell(GamePos::new(x, y - 1)).material == Material::Alive) as u32;
+                    (self.get_cell((x + 1, y - 1).into()).material == Material::Alive) as u32;
+                neighbours += (self.get_cell((x - 1, y).into()).material == Material::Alive) as u32;
+                neighbours += (self.get_cell((x + 1, y).into()).material == Material::Alive) as u32;
                 neighbours +=
-                    (self.get_cell(GamePos::new(x + 1, y - 1)).material == Material::Alive) as u32;
+                    (self.get_cell((x - 1, y + 1).into()).material == Material::Alive) as u32;
+                neighbours += (self.get_cell((x, y + 1).into()).material == Material::Alive) as u32;
                 neighbours +=
-                    (self.get_cell(GamePos::new(x - 1, y)).material == Material::Alive) as u32;
-                neighbours +=
-                    (self.get_cell(GamePos::new(x + 1, y)).material == Material::Alive) as u32;
-                neighbours +=
-                    (self.get_cell(GamePos::new(x - 1, y + 1)).material == Material::Alive) as u32;
-                neighbours +=
-                    (self.get_cell(GamePos::new(x, y + 1)).material == Material::Alive) as u32;
-                neighbours +=
-                    (self.get_cell(GamePos::new(x + 1, y + 1)).material == Material::Alive) as u32;
+                    (self.get_cell((x + 1, y + 1).into()).material == Material::Alive) as u32;
 
-                let origin_pos = GamePos::new(x, y);
+                let origin_pos = (x, y).into();
                 let c = self.get_cell_mut(origin_pos);
                 if c.material == Material::Alive && neighbours != 2 && neighbours != 3 {
                     c.to_material = Material::Dead;
@@ -351,17 +352,17 @@ impl CellSim {
 
         for y in 1..self.sim_size.height - 1 {
             for x in 1..self.sim_size.width - 1 {
-                let c = self.get_cell_mut(GamePos::new(x, y));
+                let c = self.get_cell_mut((x, y).into());
                 if c.updated {
                     let material = c.to_material;
-                    self.update_cell(GamePos::new(x, y), material);
+                    self.update_cell((x, y).into(), material);
                 }
             }
         }
     }
 
-    fn render_mouse_outline(&mut self, mouse: WindowPos<f32>) {
-        let mouse = mouse.to_game(self.state.scale as f32);
+    fn render_mouse_outline(&mut self, mouse: WindowPos<f64>) {
+        let mouse = mouse.to_game(self.state.scale as f64);
 
         Shape::CircleOutline.draw(self.state.draw_size, |off_x: i32, off_y: i32| {
             let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;

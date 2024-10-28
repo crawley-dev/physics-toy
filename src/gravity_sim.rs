@@ -7,14 +7,15 @@ use winit::keyboard::KeyCode;
 use crate::{
     app::InputData,
     frontend::{Frontend, SimData},
-    utils::{GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, INIT_DRAW_SIZE},
+    utils::{
+        GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, BACKGROUND, INIT_DRAW_SIZE,
+        MOUSE_OUTLINE, MULTIPLIER, RESISTANCE,
+    },
 };
-
-const WHITE: Rgba = Rgba::from_rgb(255, 255, 255);
 
 #[derive(Debug, Clone, Copy)]
 struct Particle {
-    pos: GamePos<f32>,
+    pos: GamePos<f64>,
     vel: GamePos<f32>,
     mass: f32,
     radius: f32,
@@ -30,7 +31,7 @@ struct State {
     scale: u32,
     running: bool,
     step_sim: bool,
-    mouse: WindowPos<f32>,
+    mouse: WindowPos<f64>,
 }
 
 pub struct GravitySim {
@@ -39,7 +40,7 @@ pub struct GravitySim {
 
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
-    camera: GamePos<f32>, // describes the top left of the viewport.
+    camera: GamePos<f64>, // describes the top left of the viewport.
     texture_buf: Vec<u8>,
     particles: Vec<Particle>,
 }
@@ -87,16 +88,16 @@ impl Frontend for GravitySim {
         self.state.draw_size = (self.state.draw_size as i32 + delta).max(1) as u32;
     }
 
-    fn draw(&mut self, mouse: WindowPos<f32>) {
+    fn draw(&mut self, mouse: WindowPos<f64>) {
         // draw is already bounded by the window size, so no need to check bounds here.
-        let game = mouse.to_game(self.state.scale as f32);
+        let game = mouse.to_game(self.state.scale as f64);
         self.state
             .draw_shape
             .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
                 // TODO(TOM): calc area/draw calls, pre-alloc them
                 self.particles.push(Particle {
-                    pos: GamePos::new(game.x as f32 + off_x as f32, game.y as f32 + off_y as f32),
-                    vel: GamePos::new(1.0, 1.0),
+                    pos: game.add(off_x as f64, off_y as f64),
+                    vel: (1.0, 1.0).into(),
                     mass: 1.0,
                     radius: 1.0,
                 });
@@ -149,34 +150,33 @@ impl Frontend for GravitySim {
             self.camera.x += 1.0;
         }
 
-        let mut prev_mouse = self.prev_state.mouse.to_game(self.state.scale as f32);
+        let mut prev_mouse = self.prev_state.mouse.to_game(self.state.scale as f64);
         prev_mouse.x -= self.camera.x; // Normalise cursor position to viewport
         prev_mouse.y -= self.camera.y;
-        let mut mouse = self.state.mouse.to_game(self.state.scale as f32);
+        let mut mouse = self.state.mouse.to_game(self.state.scale as f64);
         mouse.x -= self.camera.x; // Normalise cursor position to viewport
         mouse.y -= self.camera.y;
 
         if self.state.running || self.state.step_sim {
+            // TODO(TOM): delta updates, use 2 buffers!
             self.texture_buf.iter_mut().for_each(|p| *p = 44);
             self.update_sim(mouse);
         }
 
         // TODO(TOM): render_mouse_outline should draw what the cursor was covering up, then
         // render_particles() can be called conditionally.
-        self.render_particles(); // render unconditionally so cursor doesn't wipe out particles
-
-        // TODO(TOM): on shape change, wipe old shape clear, draw new shape
+        self.render_particles(); // currently renders unconditionally so cursor doesn't wipe out particles
         self.render_mouse_outline(
             prev_mouse,
             self.prev_state.draw_shape,
             self.prev_state.draw_size,
-            Rgba::from_rgb(44, 44, 44),
+            BACKGROUND,
         );
         self.render_mouse_outline(
             mouse,
             self.state.draw_shape,
             self.state.draw_size,
-            Rgba::from_rgb(40, 255, 40),
+            MOUSE_OUTLINE,
         );
 
         self.prev_state = self.state;
@@ -191,7 +191,7 @@ impl GravitySim {
         let particles = Vec::with_capacity(1024);
         // for i in 0..1024 {
         //     particles.push(Particle {
-        //         pos: GamePos::new(i as f32, i as f32),
+        //         pos: GamePos::new(i as f64, i as f64),
         //         vel: GamePos::new(2.0, 2.0),
         //         mass: 1.0,
         //         radius: 1.0,
@@ -208,7 +208,7 @@ impl GravitySim {
             scale: scale,
             running: false,
             step_sim: false,
-            mouse: WindowPos::new(0.0, 0.0),
+            mouse: (0.0, 0.0).into(),
         };
         Self {
             state,
@@ -216,32 +216,35 @@ impl GravitySim {
 
             window_size: size,
             sim_size,
-            camera: GamePos::new(0.0, 0.0),
+            camera: (0.0, 0.0).into(),
             texture_buf: vec![44; (sim_size.height * sim_size.width * 4) as usize],
             particles,
         }
     }
 
-    fn update_sim(&mut self, mouse: GamePos<f32>) {
-        const MULTIPLIER: f32 = 2.0;
-        const RESISTANCE: f32 = 0.99;
+    fn update_sim(&mut self, mouse: GamePos<f64>) {
         // All particles attract to mouse.
         for p in &mut self.particles {
-            let dist = f32::sqrt(
+            let dist = f64::sqrt(
                 (p.pos.x - mouse.x) * (p.pos.x - mouse.x)
                     + (p.pos.y - mouse.y) * (p.pos.y - mouse.y),
             );
 
             // If collapsing in on cursor, give it some velocity.
             if dist > 5.0 {
-                let normal = GamePos::new(
-                    (p.pos.x - mouse.x) * (1.0 / dist),
-                    (p.pos.y - mouse.y) * (1.0 / dist),
-                );
-                let normal = GamePos::new(normal.x * MULTIPLIER, normal.y * MULTIPLIER);
+                let normal = p
+                    .pos
+                    .sub(mouse.x, mouse.y)
+                    .mul_uni(1.0 / dist)
+                    .mul_uni(MULTIPLIER);
+                // let normal = GamePos::new(
+                //     (p.pos.x - mouse.x) * (1.0 / dist),
+                //     (p.pos.y - mouse.y) * (1.0 / dist),
+                // );
+                // let normal = (normal.x * MULTIPLIER, normal.y * MULTIPLIER);
 
-                p.vel.x -= normal.x;
-                p.vel.y -= normal.y;
+                p.vel.x -= normal.x as f32;
+                p.vel.y -= normal.y as f32;
             } else {
                 let mut tx = -1.0;
                 let mut ty = -1.0;
@@ -254,11 +257,11 @@ impl GravitySim {
                 p.vel.x += tx;
                 p.vel.y += ty;
             }
-            p.vel.x *= RESISTANCE;
-            p.vel.y *= RESISTANCE;
+            p.vel.x *= RESISTANCE as f32;
+            p.vel.y *= RESISTANCE as f32;
 
-            p.pos.x += p.vel.x;
-            p.pos.y += p.vel.y;
+            p.pos.x += p.vel.x as f64;
+            p.pos.y += p.vel.y as f64;
         }
     }
 
@@ -268,30 +271,39 @@ impl GravitySim {
             let p_viewport_x = p.pos.x - self.camera.x;
             let p_viewport_y = p.pos.y - self.camera.y;
             if p_viewport_x >= 0.0
-                && p_viewport_x < (self.sim_size.width - 1) as f32
+                && p_viewport_x < (self.sim_size.width - 1) as f64
                 && p_viewport_y >= 0.0
-                && p_viewport_y < (self.sim_size.height - 1) as f32
+                && p_viewport_y < (self.sim_size.height - 1) as f64
             {
                 Shape::CircleFill.draw(2, |off_x: i32, off_y: i32| {
-                    let x = (p.pos.x + off_x as f32).clamp(0.0, self.sim_size.width as f32);
-                    let y = (p.pos.y + off_y as f32).clamp(0.0, self.sim_size.height as f32);
-                    let index = 4 * (y as u32 * self.sim_size.width + x as u32) as usize;
-                    self.texture_buf[index] = 255;
+                    let pos = p.pos.add(off_x as f64, off_y as f64).clamp(
+                        0.0,
+                        0.0,
+                        (self.sim_size.width - 1) as f64,
+                        (self.sim_size.height - 1) as f64,
+                    );
+                    let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+
+                    self.texture_buf[index + 0] = 255;
                     self.texture_buf[index + 1] = 255;
                     self.texture_buf[index + 2] = 255;
-                    self.texture_buf[index + 3] = 255;
                 });
             }
         }
     }
 
-    fn render_mouse_outline(&mut self, mouse: GamePos<f32>, shape: Shape, size: u32, colour: Rgba) {
+    fn render_mouse_outline(&mut self, mouse: GamePos<f64>, shape: Shape, size: u32, colour: Rgba) {
         //TODO(TOM): not properly clearing mouse outline on size change
         shape.draw(size, |off_x: i32, off_y: i32| {
-            let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
-            let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
-            let index = 4 * (y * self.sim_size.width + x) as usize;
-            self.texture_buf[index] = colour.r;
+            let pos = mouse.add(off_x as f64, off_y as f64).clamp(
+                0.0,
+                0.0,
+                (self.sim_size.width - 1) as f64,
+                (self.sim_size.height - 1) as f64,
+            );
+            let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+
+            self.texture_buf[index + 0] = colour.r;
             self.texture_buf[index + 1] = colour.g;
             self.texture_buf[index + 2] = colour.b;
         });

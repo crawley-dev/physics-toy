@@ -20,7 +20,7 @@ use winit::{
 };
 
 pub struct InputData {
-    pub mouse: WindowPos<f32>,
+    pub mouse: WindowPos<f64>,
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
     pub keys_held: [bool; 256],
     pub keys_pressed: [bool; 256],
@@ -49,7 +49,10 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         let event_loop = EventLoop::new().unwrap();
         let window = WindowBuilder::new()
             .with_title(title)
-            .with_inner_size(Size::Physical(window_size.into()))
+            .with_inner_size(winit::dpi::PhysicalSize::new(
+                window_size.width,
+                window_size.height,
+            ))
             .build(&event_loop)
             .unwrap();
 
@@ -99,8 +102,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                         self.inputs.mouse_down = *state == ElementState::Pressed;
                     }
                     WindowEvent::CursorMoved { position, .. } => {
-                        self.inputs.mouse.x = position.x as f32;
-                        self.inputs.mouse.y = position.y as f32;
+                        self.inputs.mouse = WindowPos::from(*position);
                     }
                     WindowEvent::Resized(physical_size) => {
                         if self.backend.window.is_minimized().unwrap() {

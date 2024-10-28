@@ -14,8 +14,6 @@ pub struct SimData<'a> {
     #[educe(Debug(ignore))]
     pub texture_buf: &'a [u8],
     pub size: GameSize<u32>,
-    // pub scale: u32,
-    // pub draw_shape: Shape,
     pub frame: u64,
     pub start: Instant,
     pub frame_timer: Instant,
@@ -31,7 +29,7 @@ pub trait Frontend {
 
     fn change_draw_shape(&mut self, shape: Shape);
     fn change_draw_size(&mut self, delta: i32);
-    fn draw(&mut self, pos: WindowPos<f32>);
+    fn draw(&mut self, pos: WindowPos<f64>);
 
     fn resize_sim(&mut self, window: WindowSize<u32>);
     fn rescale_sim(&mut self, scale: u32);

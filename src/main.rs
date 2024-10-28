@@ -17,10 +17,10 @@ fn main() {
     env_logger::init();
 
     // EventLoop & window init in main func because borrowing..
-    let frontend = GravitySim::new(WindowSize::new(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
+    let frontend = GravitySim::new((INIT_WIDTH, INIT_HEIGHT).into(), INIT_SCALE);
 
     let (event_loop, window) =
-        App::<GravitySim>::init(INIT_TITLE, WindowSize::new(INIT_WIDTH, INIT_HEIGHT));
+        App::<GravitySim>::init(INIT_TITLE, (INIT_WIDTH, INIT_HEIGHT).into());
 
     let app = App::new(event_loop, &window, frontend);
 

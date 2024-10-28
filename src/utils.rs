@@ -1,32 +1,122 @@
 // Is the colour trait implemented for each format
 // with each function hanging off the type or off the instance
 
+use num::{Num, ToPrimitive};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-pub const KEY_COOLDOWN_MS: u64 = 100;
+// Colours (cell_sim.rs / gravity_sim.rs)
+pub const WHITE: Rgba = Rgba::from_rgb(255, 255, 255);
+pub const BACKGROUND: Rgba = Rgba::from_rgb(44, 44, 44);
+pub const MOUSE_OUTLINE: Rgba = Rgba::from_rgb(40, 255, 40);
+
+// simulation constants (gravity_sim.rs)
+pub const MULTIPLIER: f64 = 2.0;
+pub const RESISTANCE: f64 = 0.99;
+
+// init (main.rs)
 pub const INIT_WIDTH: u32 = 800;
 pub const INIT_HEIGHT: u32 = 600;
 pub const INIT_SCALE: u32 = 4;
-pub const INIT_DRAW_SIZE: u32 = 4;
+pub const INIT_DRAW_SIZE: u32 = 8;
+pub const INIT_TITLE: &str = "Gravity Sim";
 pub const SIM_MAX_SCALE: u32 = 10;
+
+// timing (app.rs)
+pub const KEY_COOLDOWN_MS: u64 = 100;
 pub const TARGET_FPS: f64 = 144.0;
 pub const FRAME_TIME_MS: f64 = 1000.0 / TARGET_FPS;
-pub const INIT_TITLE: &str = "Conway's Game of Life";
 
-// Types are identical to winit, but I want explicit type errors
 macro_rules! create_vec2 {
     ($name:ident, $param1:ident, $param2: ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-        pub struct $name<T: num::Num + Copy> {
+        pub struct $name<T: Num + Copy> {
             pub $param1: T,
             pub $param2: T,
         }
-        impl<T: num::Num + Copy> $name<T> {
-            pub fn new($param1: T, $param2: T) -> Self {
-                Self { $param1, $param2 }
+        impl<T: Num + Copy + ToPrimitive> $name<T> {
+            pub fn clamp(self, p1_min: T, p2_min: T, p1_max: T, p2_max: T) -> Self
+            where
+                T: PartialOrd,
+            {
+                Self {
+                    $param1: num::clamp(self.$param1, p1_min, p1_max),
+                    $param2: num::clamp(self.$param2, p2_min, p2_max),
+                }
+            }
+
+            pub fn into<T2: Num + Copy + From<T>>(self) -> $name<T2> {
+                $name {
+                    $param1: self.$param1.into(),
+                    $param2: self.$param2.into(),
+                }
+            }
+
+            pub fn add<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
+                Self {
+                    $param1: self.$param1 + p1.into(),
+                    $param2: self.$param2 + p2.into(),
+                }
+            }
+
+            pub fn sub<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
+                Self {
+                    $param1: self.$param1 - p1.into(),
+                    $param2: self.$param2 - p2.into(),
+                }
+            }
+
+            pub fn div<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
+                Self {
+                    $param1: self.$param1 / p1.into(),
+                    $param2: self.$param2 / p2.into(),
+                }
+            }
+
+            pub fn mul<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
+                Self {
+                    $param1: self.$param1 * p1.into(),
+                    $param2: self.$param2 * p2.into(),
+                }
+            }
+
+            pub fn add_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
+                Self {
+                    $param1: self.$param1 + p.into(),
+                    $param2: self.$param2 + p.into(),
+                }
+            }
+
+            pub fn sub_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
+                Self {
+                    $param1: self.$param1 - p.into(),
+                    $param2: self.$param2 - p.into(),
+                }
+            }
+
+            pub fn div_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
+                Self {
+                    $param1: self.$param1 / p.into(),
+                    $param2: self.$param2 / p.into(),
+                }
+            }
+
+            pub fn mul_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
+                Self {
+                    $param1: self.$param1 * p.into(),
+                    $param2: self.$param2 * p.into(),
+                }
             }
         }
-        impl<T: num::Num + Copy> From<PhysicalSize<T>> for $name<T> {
+
+        impl<T: Num + Copy> From<(T, T)> for $name<T> {
+            fn from((a, b): (T, T)) -> Self {
+                Self {
+                    $param1: a,
+                    $param2: b,
+                }
+            }
+        }
+        impl<T: Num + Copy> From<PhysicalSize<T>> for $name<T> {
             fn from(size: PhysicalSize<T>) -> Self {
                 Self {
                     $param1: size.width,
@@ -34,7 +124,7 @@ macro_rules! create_vec2 {
                 }
             }
         }
-        impl<T: num::Num + Copy> From<PhysicalPosition<T>> for $name<T> {
+        impl<T: Num + Copy> From<PhysicalPosition<T>> for $name<T> {
             fn from(pos: PhysicalPosition<T>) -> Self {
                 Self {
                     $param1: pos.x,
@@ -42,16 +132,16 @@ macro_rules! create_vec2 {
                 }
             }
         }
-        impl From<$name<u32>> for PhysicalSize<u32> {
-            fn from(size: $name<u32>) -> Self {
+        impl<T: Num + Copy> From<$name<T>> for PhysicalSize<T> {
+            fn from(size: $name<T>) -> Self {
                 Self {
                     width: size.$param1,
                     height: size.$param2,
                 }
             }
         }
-        impl From<$name<u32>> for PhysicalPosition<u32> {
-            fn from(pos: $name<u32>) -> Self {
+        impl<T: Num + Copy> From<$name<T>> for PhysicalPosition<T> {
+            fn from(pos: $name<T>) -> Self {
                 Self {
                     x: pos.$param1,
                     y: pos.$param2,
@@ -66,7 +156,7 @@ create_vec2!(WindowPos, x, y);
 create_vec2!(GameSize, width, height);
 create_vec2!(WindowSize, width, height);
 
-impl<T: num::Num + Copy> GamePos<T> {
+impl<T: Num + Copy> GamePos<T> {
     pub fn to_window(self, scale: T) -> WindowPos<T> {
         WindowPos {
             x: self.x * scale,
@@ -74,7 +164,7 @@ impl<T: num::Num + Copy> GamePos<T> {
         }
     }
 }
-impl<T: num::Num + Copy> WindowPos<T> {
+impl<T: Num + Copy> WindowPos<T> {
     pub fn to_game(self, scale: T) -> GamePos<T> {
         GamePos {
             x: self.x / scale,
@@ -82,7 +172,7 @@ impl<T: num::Num + Copy> WindowPos<T> {
         }
     }
 }
-impl<T: num::Num + Copy> GameSize<T> {
+impl<T: Num + Copy> GameSize<T> {
     pub fn to_window(self, scale: T) -> WindowSize<T> {
         WindowSize {
             width: self.width * scale,
@@ -90,7 +180,7 @@ impl<T: num::Num + Copy> GameSize<T> {
         }
     }
 }
-impl<T: num::Num + Copy> WindowSize<T> {
+impl<T: Num + Copy> WindowSize<T> {
     pub fn to_game(self, scale: T) -> GameSize<T> {
         GameSize {
             width: self.width / scale,
