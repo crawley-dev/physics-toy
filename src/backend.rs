@@ -280,7 +280,7 @@ impl<'a> Backend<'a> {
     }
 
     pub fn render(&mut self, sim_data: &SimData, start: Instant) {
-        optick::event!("Render pass");
+        optick::event!("Backend::render");
 
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -329,27 +329,37 @@ impl<'a> Backend<'a> {
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         trace!("Bound items to render pass");
 
-        // Writing new time value to a GPU buffer, for shader code to access!
-        self.gpu_uniforms.time = start.elapsed().as_millis_f32();
-        self.queue.write_buffer(
-            &self.gpu_data_buffer,
-            0, // the entire uniform buffer is updated.
-            bytemuck::cast_slice(&[self.gpu_uniforms]),
-        );
+        {
+            optick::event!("Update gpu uniforms");
+            // Writing new time value to a GPU buffer, for shader code to access!
+            self.gpu_uniforms.time = start.elapsed().as_millis_f32();
+            self.queue.write_buffer(
+                &self.gpu_data_buffer,
+                0, // the entire uniform buffer is updated.
+                bytemuck::cast_slice(&[self.gpu_uniforms]),
+            );
+        }
 
-        Self::update_texture(&self.queue, &self.texture, sim_data);
+        {
+            optick::event!("Update texture && draw");
+            Self::update_texture(&self.queue, &self.texture, sim_data);
 
-        // Takes 6 vertices (2 triangles = 1 square) and the vertex & fragment shader
-        render_pass.draw(0..6, 0..1);
-
+            // Takes 6 vertices (2 triangles = 1 square) and the vertex & fragment shader
+            render_pass.draw(0..6, 0..1);
+        }
         // Drop render_pass' mutable reference to encoder, crashes otherwise.
         drop(render_pass);
 
-        self.queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
+        {
+            optick::event!("Submitted render pass");
+            self.queue.submit(std::iter::once(encoder.finish()));
+            frame.present();
+        }
     }
 
     pub fn resize(&mut self, window_size: PhysicalSize<u32>, sim_data: &SimData) {
+        optick::event!("Backend::resize");
+
         trace!("Attempting window & texture resize to {:?}", sim_data.size);
 
         self.window_size = window_size;

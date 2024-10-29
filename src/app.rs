@@ -111,6 +111,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             return;
                         }
 
+                        optick::event!("Window Resize");
+
                         self.frontend.resize_sim(WindowSize::from(*physical_size));
                         self.backend
                             .resize(*physical_size, &self.frontend.get_sim_data());
@@ -229,18 +231,26 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         inputs.keys_pressed = [false; 256];
     }
 
-    // TODO(TOM): add some crazy delta time stuff, so the framerate can't increase by TOO Much,
-    // e.g. because the entire sim is offscreen
+    // TODO(TOM): instead of sleeping, have multiple frames in flight, prob max 2 (front & back buffer)
     fn timing(frame: u64, start: Instant, frame_timer: &mut Instant) {
-        optick::event!();
+        optick::event!("App::timing");
 
         let elapsed = frame_timer.elapsed();
         let remaining_frame_time = (FRAME_TIME_MS - elapsed.as_millis_f64()).max(0.0);
 
-        info!(
+        trace!(
             "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
             start.elapsed().div(frame as u32)
         );
+
+        // avg frametime
+        if frame % 60 == 0 {
+            info!(
+                "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
+                start.elapsed().div(frame as u32)
+            );
+        }
+
         if remaining_frame_time > MS_BUFFER {
             let with_buffer = (remaining_frame_time - MS_BUFFER);
             std::thread::sleep(Duration::from_millis(with_buffer as u64));

@@ -12,7 +12,7 @@ pub const MOUSE_OUTLINE: Rgba = Rgba::from_rgb(40, 255, 40);
 // simulation constants (gravity_sim.rs)
 pub const MULTIPLIER: f64 = 2.0;
 pub const RESISTANCE: f64 = 0.99;
-pub const INIT_PARTICLES: usize = 200_000;
+pub const INIT_PARTICLES: usize = 1_000_000;
 
 // init (main.rs)
 pub const INIT_WIDTH: u32 = 800;

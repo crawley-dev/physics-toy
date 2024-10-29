@@ -1,9 +1,11 @@
-use std::time::Instant;
+use std::{cell::UnsafeCell, sync::Arc, time::Instant};
 
+use bytemuck::from_bytes_mut;
 use log::*;
 use num::pow::Pow;
 use rand::random;
-use rayon::prelude::*;
+use rayon::{prelude::*, ThreadPool};
+use wgpu::BufferSize;
 use winit::keyboard::KeyCode;
 
 use crate::{
@@ -14,6 +16,23 @@ use crate::{
         INIT_PARTICLES, MOUSE_OUTLINE, MULTIPLIER, RESISTANCE, TARGET_FPS, WHITE,
     },
 };
+
+// Used as buf accesses don't need to be thread safe, enables parallel rendering.
+struct SyncCell<T>(UnsafeCell<T>);
+unsafe impl<T> Sync for SyncCell<T> where T: Send {}
+impl<T> SyncCell<T> {
+    fn new(val: T) -> Self {
+        Self(UnsafeCell::new(val))
+    }
+
+    fn get(&self) -> &T {
+        unsafe { &*self.0.get() }
+    }
+
+    fn get_mut(&self) -> &mut T {
+        unsafe { &mut *self.0.get() }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Particle {
@@ -38,19 +57,22 @@ pub struct GravitySim {
     state: State,
     prev_state: State,
 
+    // thread_pool: ThreadPool,
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
     camera: GamePos<f64>, // describes the top left of the viewport.
-    texture_bufs: [Vec<u8>; 2],
+    bufs: [Vec<SyncCell<u8>>; 2],
     front_buffer: usize,
     particles: Vec<Particle>,
 }
 
 impl Frontend for GravitySim {
-    // region: Utility
+    // region: Utilitys
     fn get_sim_data(&self) -> SimData {
+        let buf = &self.bufs[self.front_buffer];
+        let buf_slice = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
         SimData {
-            texture_buf: self.texture_bufs[self.front_buffer].as_slice(),
+            texture_buf: buf_slice,
             size: self.sim_size,
             frame: self.state.frame,
         }
@@ -105,7 +127,7 @@ impl Frontend for GravitySim {
     // endregion
     // region: Sim Manipultion
     fn resize_sim(&mut self, window: WindowSize<u32>) {
-        optick::event!();
+        optick::event!("GravitySim::resize_sim");
 
         let new_sim_size = window.to_game(self.state.scale);
         if new_sim_size == self.sim_size {
@@ -113,16 +135,21 @@ impl Frontend for GravitySim {
             return;
         }
 
-        let cell_count = (new_sim_size.width * new_sim_size.height) as usize;
-        let new_sim_buf = vec![44; cell_count * 4];
+        let buf_size = (new_sim_size.width * new_sim_size.height * 4) as usize;
+        let mut new_buf = Vec::with_capacity(buf_size);
+        let mut new_buf_clone = Vec::with_capacity(buf_size);
+        for _ in 0..buf_size {
+            new_buf.push(SyncCell::new(44));
+            new_buf_clone.push(SyncCell::new(44));
+        }
         trace!(
-            "Resizing sim to: {new_sim_size:?} | {window:?} | scale: {} | {cell_count}",
+            "Resizing sim to: {new_sim_size:?} | {window:?} | scale: {} | {buf_size}",
             self.state.scale
         );
 
         self.window_size = window;
         self.sim_size = new_sim_size;
-        self.texture_bufs = [new_sim_buf.clone(), new_sim_buf];
+        self.bufs = [new_buf, new_buf_clone];
         // don't change particle stuff.
     }
 
@@ -137,11 +164,11 @@ impl Frontend for GravitySim {
     // endregion
     // region: Update
     fn update(&mut self, inputs: &mut InputData) {
-        optick::event!();
-        // optick::tag!("frame", self.state.frame);
+        optick::event!("GravitySim::update");
 
         self.state.mouse = inputs.mouse;
 
+        // TODO(TOM): this doesn't work!!
         if inputs.is_pressed(KeyCode::KeyW) {
             self.camera.y -= 1.0;
         } else if inputs.is_pressed(KeyCode::KeyS) {
@@ -163,17 +190,25 @@ impl Frontend for GravitySim {
         if self.state.running || self.state.step_sim {
             // TODO(TOM): delta updates, use 2 buffers!
             {
-                optick::event!("Resetting texture to 44");
-                self.texture_bufs[self.front_buffer]
+                optick::event!("Resetting texture");
+                self.bufs[self.front_buffer]
                     .iter_mut()
-                    .for_each(|p| *p = 44);
+                    .for_each(|x| unsafe { *x.get_mut() = 44 });
             }
             self.update_sim(mouse);
         }
 
-        self.render_particles();
-        if prev_mouse != mouse {
-            self.clear_last_mouse_outline(prev_mouse);
+        Self::render_particles(
+            &mut self.bufs[self.front_buffer],
+            &mut self.particles,
+            self.sim_size,
+        );
+
+        {
+            optick::event!("Drawing Mouse Outline");
+            if prev_mouse != mouse {
+                self.clear_last_mouse_outline(prev_mouse);
+            }
         }
         self.render_mouse_outline(mouse, MOUSE_OUTLINE);
 
@@ -184,6 +219,7 @@ impl Frontend for GravitySim {
         self.prev_state = self.state;
         self.state.step_sim = false;
         self.state.frame += 1;
+        //TODO(TOM): sort out & use for multiple frames in flight.
         // self.front_buffer = (self.front_buffer + 1) % 2;
     }
     // endregion
@@ -191,10 +227,23 @@ impl Frontend for GravitySim {
 
 impl GravitySim {
     pub fn new(size: WindowSize<u32>, scale: u32) -> Self {
-        // let
+        // let thread_pool = rayon::ThreadPoolBuilder::new()
+        //     .num_threads(1)
+        //     .build()
+        //     .unwrap();
+        // info!(
+        //     "Thread Pool initialised with {} threads",
+        //     thread_pool.current_num_threads()
+        // );
 
         let sim_size = size.to_game(scale);
-        let texture_buf = vec![44; (sim_size.height * sim_size.width * 4) as usize];
+        let buf_size = (sim_size.width * sim_size.height * 4) as usize;
+        let mut buf = Vec::with_capacity(buf_size);
+        let mut buf_clone = Vec::with_capacity(buf_size);
+        for _ in 0..buf_size {
+            buf.push(SyncCell::new(44));
+            buf_clone.push(SyncCell::new(44));
+        }
 
         let mut particles = Vec::with_capacity(INIT_PARTICLES);
         let rand = random::<u64>() % 10_000;
@@ -220,10 +269,11 @@ impl GravitySim {
             state,
             prev_state: state,
 
+            // thread_pool,
             window_size: size,
             sim_size,
             camera: (0.0, 0.0).into(),
-            texture_bufs: [texture_buf.clone(), texture_buf],
+            bufs: [buf, buf_clone],
             front_buffer: 0,
             particles,
         }
@@ -267,41 +317,47 @@ impl GravitySim {
         });
     }
 
-    fn render_particles(&mut self) {
+    fn render_particles(
+        texture_buf: &mut [SyncCell<u8>],
+        particles: &mut [Particle],
+        sim_size: GameSize<u32>,
+    ) {
         optick::event!("Update Texture Buffer");
+        particles
+            .par_iter()
+            .filter(|p| {
+                p.pos.x >= 0.0
+                    && p.pos.x < (sim_size.width - 1) as f64
+                    && p.pos.y >= 0.0
+                    && p.pos.y < (sim_size.height - 1) as f64
+            })
+            .for_each(|p| {
+                let index = 4 * (p.pos.y as u32 * sim_size.width + p.pos.x as u32) as usize;
 
-        for p in &self.particles {
-            // update particles if they are in camera viewport
-            let p_viewport_x = p.pos.x - self.camera.x;
-            let p_viewport_y = p.pos.y - self.camera.y;
-            if p_viewport_x >= 0.0
-                && p_viewport_x < (self.sim_size.width - 1) as f64
-                && p_viewport_y >= 0.0
-                && p_viewport_y < (self.sim_size.height - 1) as f64
-            {
-                // TODO(TOM): drawing the circles is really intensive.
-                // Shape::CircleFill.draw(2, |off_x: i32, off_y: i32| {
-                //     let pos = p.pos.add(off_x as f64, off_y as f64).clamp(
-                //         0.0,
-                //         0.0,
-                //         (self.sim_size.width - 1) as f64,
-                //         (self.sim_size.height - 1) as f64,
-                //     );
-                //     let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+                unsafe {
+                    *texture_buf[index + 0].get_mut() = WHITE.r;
+                    *texture_buf[index + 1].get_mut() = WHITE.g;
+                    *texture_buf[index + 2].get_mut() = WHITE.b;
+                    *texture_buf[index + 3].get_mut() = WHITE.a;
+                }
+            });
 
-                //     self.texture_bufs[self.front_buffer][index + 0] = WHITE.r;
-                //     self.texture_bufs[self.front_buffer][index + 1] = WHITE.g;
-                //     self.texture_bufs[self.front_buffer][index + 2] = WHITE.b;
-                //     self.texture_bufs[self.front_buffer][index + 3] = WHITE.a;
-                // });
-                let index = 4 * (p.pos.y as u32 * self.sim_size.width + p.pos.x as u32) as usize;
-
-                self.texture_bufs[self.front_buffer][index + 0] = WHITE.r;
-                self.texture_bufs[self.front_buffer][index + 1] = WHITE.g;
-                self.texture_bufs[self.front_buffer][index + 2] = WHITE.b;
-                self.texture_bufs[self.front_buffer][index + 3] = WHITE.a;
-            }
-        }
+        // TODO(TOM): this will work for cellular automata (ish), but not for particles
+        // particles
+        //     .par_iter()
+        //     .zip(texture_buf.par_chunks_exact_mut(4))
+        //     .filter(|(p, c)| {
+        //         p.pos.x >= 0.0
+        //             && p.pos.x < (sim_size.width - 1) as f64
+        //             && p.pos.y >= 0.0
+        //             && p.pos.y < (sim_size.height - 1) as f64
+        //     })
+        //     .for_each(|(p, c)| {
+        //         c[0] = WHITE.r;
+        //         c[1] = WHITE.g;
+        //         c[2] = WHITE.b;
+        //         c[3] = WHITE.a;
+        //     });
     }
 
     // TODO(TOM): make this a separate texture layer, overlayed on top of the sim
@@ -320,10 +376,13 @@ impl GravitySim {
                 );
                 let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
 
-                self.texture_bufs[self.front_buffer][index + 0] = MOUSE_OUTLINE.r;
-                self.texture_bufs[self.front_buffer][index + 1] = MOUSE_OUTLINE.g;
-                self.texture_bufs[self.front_buffer][index + 2] = MOUSE_OUTLINE.b;
-                self.texture_bufs[self.front_buffer][index + 3] = MOUSE_OUTLINE.a;
+                let buf = &mut self.bufs[self.front_buffer];
+                unsafe {
+                    *buf[index + 0].get_mut() = MOUSE_OUTLINE.r;
+                    *buf[index + 1].get_mut() = MOUSE_OUTLINE.g;
+                    *buf[index + 2].get_mut() = MOUSE_OUTLINE.b;
+                    *buf[index + 3].get_mut() = MOUSE_OUTLINE.a;
+                }
             });
     }
 
@@ -340,21 +399,23 @@ impl GravitySim {
                 );
                 let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
 
-                let bufs = &mut self.texture_bufs;
-                if bufs[self.front_buffer][index + 0] == MOUSE_OUTLINE.r
-                    && bufs[self.front_buffer][index + 1] == MOUSE_OUTLINE.g
-                    && bufs[self.front_buffer][index + 2] == MOUSE_OUTLINE.b
-                    && bufs[self.front_buffer][index + 3] == MOUSE_OUTLINE.a
-                {
-                    bufs[self.front_buffer][index + 0] = BACKGROUND.r;
-                    bufs[self.front_buffer][index + 1] = BACKGROUND.g;
-                    bufs[self.front_buffer][index + 2] = BACKGROUND.b;
-                    bufs[self.front_buffer][index + 3] = BACKGROUND.a;
-                } else {
-                    bufs[self.front_buffer][index + 0] = bufs[self.front_buffer][index + 0];
-                    bufs[self.front_buffer][index + 1] = bufs[self.front_buffer][index + 1];
-                    bufs[self.front_buffer][index + 2] = bufs[self.front_buffer][index + 2];
-                    bufs[self.front_buffer][index + 3] = bufs[self.front_buffer][index + 3];
+                let buf = &mut self.bufs[self.front_buffer];
+                unsafe {
+                    if *buf[index + 0].get_mut() == MOUSE_OUTLINE.r
+                        && *buf[index + 1].get_mut() == MOUSE_OUTLINE.g
+                        && *buf[index + 2].get_mut() == MOUSE_OUTLINE.b
+                        && *buf[index + 3].get_mut() == MOUSE_OUTLINE.a
+                    {
+                        *buf[index + 0].get_mut() = BACKGROUND.r;
+                        *buf[index + 1].get_mut() = BACKGROUND.g;
+                        *buf[index + 2].get_mut() = BACKGROUND.b;
+                        *buf[index + 3].get_mut() = BACKGROUND.a;
+                    } else {
+                        *buf[index + 0].get_mut() = *buf[index + 0].get();
+                        *buf[index + 1].get_mut() = *buf[index + 1].get();
+                        *buf[index + 2].get_mut() = *buf[index + 2].get();
+                        *buf[index + 3].get_mut() = *buf[index + 3].get();
+                    }
                 }
             });
     }
