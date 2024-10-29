@@ -1,6 +1,8 @@
 use std::time::Instant;
 
 use log::*;
+use num::pow::Pow;
+use rand::random;
 use rayon::prelude::*;
 use winit::keyboard::KeyCode;
 
@@ -9,7 +11,7 @@ use crate::{
     frontend::{Frontend, SimData},
     utils::{
         GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, BACKGROUND, INIT_DRAW_SIZE,
-        MOUSE_OUTLINE, MULTIPLIER, RESISTANCE,
+        INIT_PARTICLES, MOUSE_OUTLINE, MULTIPLIER, RESISTANCE, TARGET_FPS, WHITE,
     },
 };
 
@@ -24,8 +26,6 @@ struct Particle {
 #[derive(Debug, Clone, Copy)]
 struct State {
     frame: u64,
-    start: Instant, // TODO(TOM): INSTANT Type PANICS ON WASM
-    frame_timer: Instant,
     draw_size: u32,
     draw_shape: Shape,
     scale: u32,
@@ -41,7 +41,8 @@ pub struct GravitySim {
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
     camera: GamePos<f64>, // describes the top left of the viewport.
-    texture_buf: Vec<u8>,
+    texture_bufs: [Vec<u8>; 2],
+    front_buffer: usize,
     particles: Vec<Particle>,
 }
 
@@ -49,11 +50,9 @@ impl Frontend for GravitySim {
     // region: Utility
     fn get_sim_data(&self) -> SimData {
         SimData {
-            texture_buf: &self.texture_buf,
+            texture_buf: self.texture_bufs[self.front_buffer].as_slice(),
             size: self.sim_size,
             frame: self.state.frame,
-            start: self.state.start,
-            frame_timer: self.state.frame_timer,
         }
     }
 
@@ -106,6 +105,8 @@ impl Frontend for GravitySim {
     // endregion
     // region: Sim Manipultion
     fn resize_sim(&mut self, window: WindowSize<u32>) {
+        optick::event!();
+
         let new_sim_size = window.to_game(self.state.scale);
         if new_sim_size == self.sim_size {
             info!("Sim size unchanged, skipping resize. {new_sim_size:?}");
@@ -121,7 +122,7 @@ impl Frontend for GravitySim {
 
         self.window_size = window;
         self.sim_size = new_sim_size;
-        self.texture_buf = new_sim_buf;
+        self.texture_bufs = [new_sim_buf.clone(), new_sim_buf];
         // don't change particle stuff.
     }
 
@@ -136,7 +137,9 @@ impl Frontend for GravitySim {
     // endregion
     // region: Update
     fn update(&mut self, inputs: &mut InputData) {
-        self.state.frame_timer = Instant::now();
+        optick::event!();
+        // optick::tag!("frame", self.state.frame);
+
         self.state.mouse = inputs.mouse;
 
         if inputs.is_pressed(KeyCode::KeyW) {
@@ -159,53 +162,56 @@ impl Frontend for GravitySim {
 
         if self.state.running || self.state.step_sim {
             // TODO(TOM): delta updates, use 2 buffers!
-            self.texture_buf.iter_mut().for_each(|p| *p = 44);
+            {
+                optick::event!("Resetting texture to 44");
+                self.texture_bufs[self.front_buffer]
+                    .iter_mut()
+                    .for_each(|p| *p = 44);
+            }
             self.update_sim(mouse);
         }
 
-        // TODO(TOM): render_mouse_outline should draw what the cursor was covering up, then
-        // render_particles() can be called conditionally.
-        self.render_particles(); // currently renders unconditionally so cursor doesn't wipe out particles
-        self.render_mouse_outline(
-            prev_mouse,
-            self.prev_state.draw_shape,
-            self.prev_state.draw_size,
-            BACKGROUND,
-        );
-        self.render_mouse_outline(
-            mouse,
-            self.state.draw_shape,
-            self.state.draw_size,
-            MOUSE_OUTLINE,
-        );
+        self.render_particles();
+        if prev_mouse != mouse {
+            self.clear_last_mouse_outline(prev_mouse);
+        }
+        self.render_mouse_outline(mouse, MOUSE_OUTLINE);
+
+        if self.state.frame % TARGET_FPS as u64 == 0 {
+            info!("Particles: {}", self.particles.len());
+        }
 
         self.prev_state = self.state;
         self.state.step_sim = false;
         self.state.frame += 1;
+        // self.front_buffer = (self.front_buffer + 1) % 2;
     }
     // endregion
 }
 
 impl GravitySim {
     pub fn new(size: WindowSize<u32>, scale: u32) -> Self {
-        let particles = Vec::with_capacity(1024);
-        // for i in 0..1024 {
-        //     particles.push(Particle {
-        //         pos: GamePos::new(i as f64, i as f64),
-        //         vel: GamePos::new(2.0, 2.0),
-        //         mass: 1.0,
-        //         radius: 1.0,
-        //     });
-        // }
+        // let
 
         let sim_size = size.to_game(scale);
+        let texture_buf = vec![44; (sim_size.height * sim_size.width * 4) as usize];
+
+        let mut particles = Vec::with_capacity(INIT_PARTICLES);
+        let rand = random::<u64>() % 10_000;
+        for _ in 0..INIT_PARTICLES {
+            particles.push(Particle {
+                pos: (random::<f64>() * rand as f64, random::<f64>() * rand as f64).into(),
+                vel: (0.0, 0.0).into(),
+                mass: 1.0,
+                radius: 1.0,
+            });
+        }
+
         let state = State {
             frame: 0,
-            start: Instant::now(),
-            frame_timer: Instant::now(),
             draw_size: INIT_DRAW_SIZE,
             draw_shape: Shape::CircleFill,
-            scale: scale,
+            scale,
             running: false,
             step_sim: false,
             mouse: (0.0, 0.0).into(),
@@ -217,31 +223,27 @@ impl GravitySim {
             window_size: size,
             sim_size,
             camera: (0.0, 0.0).into(),
-            texture_buf: vec![44; (sim_size.height * sim_size.width * 4) as usize],
+            texture_bufs: [texture_buf.clone(), texture_buf],
+            front_buffer: 0,
             particles,
         }
     }
 
     fn update_sim(&mut self, mouse: GamePos<f64>) {
+        optick::event!("Physics Update");
+
         // All particles attract to mouse.
-        for p in &mut self.particles {
-            let dist = f64::sqrt(
-                (p.pos.x - mouse.x) * (p.pos.x - mouse.x)
-                    + (p.pos.y - mouse.y) * (p.pos.y - mouse.y),
-            );
+        self.particles.par_iter_mut().for_each(|p| {
+            let mut dist = p.pos.sub(mouse.x, mouse.y);
+            let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
 
             // If collapsing in on cursor, give it some velocity.
-            if dist > 5.0 {
+            if abs_dist > 5.0 {
                 let normal = p
                     .pos
                     .sub(mouse.x, mouse.y)
-                    .mul_uni(1.0 / dist)
+                    .mul_uni(1.0 / abs_dist)
                     .mul_uni(MULTIPLIER);
-                // let normal = GamePos::new(
-                //     (p.pos.x - mouse.x) * (1.0 / dist),
-                //     (p.pos.y - mouse.y) * (1.0 / dist),
-                // );
-                // let normal = (normal.x * MULTIPLIER, normal.y * MULTIPLIER);
 
                 p.vel.x -= normal.x as f32;
                 p.vel.y -= normal.y as f32;
@@ -262,10 +264,12 @@ impl GravitySim {
 
             p.pos.x += p.vel.x as f64;
             p.pos.y += p.vel.y as f64;
-        }
+        });
     }
 
     fn render_particles(&mut self) {
+        optick::event!("Update Texture Buffer");
+
         for p in &self.particles {
             // update particles if they are in camera viewport
             let p_viewport_x = p.pos.x - self.camera.x;
@@ -275,37 +279,83 @@ impl GravitySim {
                 && p_viewport_y >= 0.0
                 && p_viewport_y < (self.sim_size.height - 1) as f64
             {
-                Shape::CircleFill.draw(2, |off_x: i32, off_y: i32| {
-                    let pos = p.pos.add(off_x as f64, off_y as f64).clamp(
-                        0.0,
-                        0.0,
-                        (self.sim_size.width - 1) as f64,
-                        (self.sim_size.height - 1) as f64,
-                    );
-                    let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+                // TODO(TOM): drawing the circles is really intensive.
+                // Shape::CircleFill.draw(2, |off_x: i32, off_y: i32| {
+                //     let pos = p.pos.add(off_x as f64, off_y as f64).clamp(
+                //         0.0,
+                //         0.0,
+                //         (self.sim_size.width - 1) as f64,
+                //         (self.sim_size.height - 1) as f64,
+                //     );
+                //     let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
 
-                    self.texture_buf[index + 0] = 255;
-                    self.texture_buf[index + 1] = 255;
-                    self.texture_buf[index + 2] = 255;
-                });
+                //     self.texture_bufs[self.front_buffer][index + 0] = WHITE.r;
+                //     self.texture_bufs[self.front_buffer][index + 1] = WHITE.g;
+                //     self.texture_bufs[self.front_buffer][index + 2] = WHITE.b;
+                //     self.texture_bufs[self.front_buffer][index + 3] = WHITE.a;
+                // });
+                let index = 4 * (p.pos.y as u32 * self.sim_size.width + p.pos.x as u32) as usize;
+
+                self.texture_bufs[self.front_buffer][index + 0] = WHITE.r;
+                self.texture_bufs[self.front_buffer][index + 1] = WHITE.g;
+                self.texture_bufs[self.front_buffer][index + 2] = WHITE.b;
+                self.texture_bufs[self.front_buffer][index + 3] = WHITE.a;
             }
         }
     }
 
-    fn render_mouse_outline(&mut self, mouse: GamePos<f64>, shape: Shape, size: u32, colour: Rgba) {
-        //TODO(TOM): not properly clearing mouse outline on size change
-        shape.draw(size, |off_x: i32, off_y: i32| {
-            let pos = mouse.add(off_x as f64, off_y as f64).clamp(
-                0.0,
-                0.0,
-                (self.sim_size.width - 1) as f64,
-                (self.sim_size.height - 1) as f64,
-            );
-            let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+    // TODO(TOM): make this a separate texture layer, overlayed on top of the sim
+    fn render_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+        optick::event!("Rendering Mouse Outline");
 
-            self.texture_buf[index + 0] = colour.r;
-            self.texture_buf[index + 1] = colour.g;
-            self.texture_buf[index + 2] = colour.b;
-        });
+        //TODO(TOM): not properly clearing mouse outline on size change
+        self.state
+            .draw_shape
+            .draw(self.state.draw_size, |off_x, off_y| {
+                let pos = mouse.add(off_x as f64, off_y as f64).clamp(
+                    0.0,
+                    0.0,
+                    (self.sim_size.width - 1) as f64,
+                    (self.sim_size.height - 1) as f64,
+                );
+                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+
+                self.texture_bufs[self.front_buffer][index + 0] = MOUSE_OUTLINE.r;
+                self.texture_bufs[self.front_buffer][index + 1] = MOUSE_OUTLINE.g;
+                self.texture_bufs[self.front_buffer][index + 2] = MOUSE_OUTLINE.b;
+                self.texture_bufs[self.front_buffer][index + 3] = MOUSE_OUTLINE.a;
+            });
+    }
+
+    // TODO(TOM): this function proper doesn't work with back buffers
+    fn clear_last_mouse_outline(&mut self, mouse: GamePos<f64>) {
+        self.prev_state
+            .draw_shape
+            .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
+                let pos = mouse.add(off_x as f64, off_y as f64).clamp(
+                    0.0,
+                    0.0,
+                    (self.sim_size.width - 1) as f64,
+                    (self.sim_size.height - 1) as f64,
+                );
+                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+
+                let bufs = &mut self.texture_bufs;
+                if bufs[self.front_buffer][index + 0] == MOUSE_OUTLINE.r
+                    && bufs[self.front_buffer][index + 1] == MOUSE_OUTLINE.g
+                    && bufs[self.front_buffer][index + 2] == MOUSE_OUTLINE.b
+                    && bufs[self.front_buffer][index + 3] == MOUSE_OUTLINE.a
+                {
+                    bufs[self.front_buffer][index + 0] = BACKGROUND.r;
+                    bufs[self.front_buffer][index + 1] = BACKGROUND.g;
+                    bufs[self.front_buffer][index + 2] = BACKGROUND.b;
+                    bufs[self.front_buffer][index + 3] = BACKGROUND.a;
+                } else {
+                    bufs[self.front_buffer][index + 0] = bufs[self.front_buffer][index + 0];
+                    bufs[self.front_buffer][index + 1] = bufs[self.front_buffer][index + 1];
+                    bufs[self.front_buffer][index + 2] = bufs[self.front_buffer][index + 2];
+                    bufs[self.front_buffer][index + 3] = bufs[self.front_buffer][index + 3];
+                }
+            });
     }
 }

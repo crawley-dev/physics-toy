@@ -24,5 +24,7 @@ fn main() {
 
     let app = App::new(event_loop, &window, frontend);
 
+    // optick::start_capture();
     app.run();
+    // optick::stop_capture("profile_capture");
 }

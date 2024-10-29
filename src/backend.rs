@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::frontend::SimData;
 use log::*;
 use winit::dpi::PhysicalSize;
@@ -277,8 +279,9 @@ impl<'a> Backend<'a> {
         }
     }
 
-    pub fn render(&mut self, sim_data: &SimData) {
-        let elapsed = sim_data.start.elapsed().as_millis_f32();
+    pub fn render(&mut self, sim_data: &SimData, start: Instant) {
+        optick::event!("Render pass");
+
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             // can't gracefully exit in oom states
@@ -327,7 +330,7 @@ impl<'a> Backend<'a> {
         trace!("Bound items to render pass");
 
         // Writing new time value to a GPU buffer, for shader code to access!
-        self.gpu_uniforms.time = elapsed;
+        self.gpu_uniforms.time = start.elapsed().as_millis_f32();
         self.queue.write_buffer(
             &self.gpu_data_buffer,
             0, // the entire uniform buffer is updated.

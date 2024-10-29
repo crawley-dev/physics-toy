@@ -45,8 +45,6 @@ pub struct Cell {
 #[derive(Debug, Clone, Copy)]
 struct State {
     frame: u64,
-    start: Instant, // TODO(TOM): INSTANT Type PANICS ON WASM
-    frame_timer: Instant,
     draw_size: u32,
     draw_shape: Shape,
     scale: u32,
@@ -72,8 +70,6 @@ impl Frontend for CellSim {
             texture_buf: &self.texture_buf,
             size: self.sim_size,
             frame: self.state.frame,
-            start: self.state.start,
-            frame_timer: self.state.frame_timer,
         }
     }
 
@@ -196,7 +192,6 @@ impl Frontend for CellSim {
     // endregion
     // region: update
     fn update(&mut self, inputs: &mut InputData) {
-        self.state.frame_timer = Instant::now();
         self.state.mouse = inputs.mouse;
 
         if self.state.running || self.state.step_sim {
@@ -242,8 +237,6 @@ impl CellSim {
 
         let state = State {
             frame: 0,
-            frame_timer: Instant::now(),
-            start: Instant::now(),
             draw_shape: Shape::CircleFill,
             draw_size: INIT_DRAW_SIZE,
             running: false,

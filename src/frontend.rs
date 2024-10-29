@@ -15,8 +15,6 @@ pub struct SimData<'a> {
     pub texture_buf: &'a [u8],
     pub size: GameSize<u32>,
     pub frame: u64,
-    pub start: Instant,
-    pub frame_timer: Instant,
 }
 
 pub trait Frontend {

@@ -2,12 +2,14 @@ use crate::{
     backend::Backend,
     frontend::{Frontend, SimData},
     utils::{
-        Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, SIM_MAX_SCALE, TARGET_FPS,
+        Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
+        TARGET_FPS,
     },
 };
 use log::*;
 use std::{
     mem::transmute,
+    ops::{Div, Sub},
     time::{Duration, Instant},
 };
 use winit::{
@@ -79,8 +81,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
     // TODO(TOM): use matches! macro more , its INCREDIBLE
 
     pub fn run(mut self) {
-        let mut last_frame_times = [0.0; TARGET_FPS as usize];
-        let mut n_frame_timer = Instant::now();
+        let mut start = Instant::now();
+        let mut frame_timer = start;
         self.event_loop
             .run(move |event, control_flow| match event {
                 Event::AboutToWait => {
@@ -118,6 +120,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             return;
                         }
 
+                        optick::next_frame();
+
                         Self::handle_inputs(
                             &mut self.frontend,
                             &mut self.backend,
@@ -126,9 +130,9 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                         self.frontend.update(&mut self.inputs);
 
                         let sim_data = self.frontend.get_sim_data();
-                        self.backend.render(&sim_data);
+                        self.backend.render(&sim_data, start);
 
-                        Self::timing(&sim_data, &mut last_frame_times, &mut n_frame_timer);
+                        Self::timing(sim_data.frame, start, &mut frame_timer);
                     }
                     _ => {}
                 },
@@ -174,6 +178,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
 
     // A centralised input handling function, calling upon backend and frontend calls.
     fn handle_inputs(frontend: &mut F, backend: &mut Backend<'_>, inputs: &mut InputData) {
+        optick::event!();
+
         // TODO(TOM): the order of input handling will probably matter..
 
         // TODO(TOM): Interpolation, i.e bresenhams line algorithm
@@ -223,33 +229,22 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         inputs.keys_pressed = [false; 256];
     }
 
-    fn timing(
-        sim_data: &SimData,
-        last_frame_times: &mut [f64; TARGET_FPS as usize],
-        n_frame_timer: &mut Instant,
-    ) {
-        // measure time taken to render current frame
-        // sleep for remaining time "allotted" to this current frame
-        let elapsed = sim_data.frame_timer.elapsed();
+    // TODO(TOM): add some crazy delta time stuff, so the framerate can't increase by TOO Much,
+    // e.g. because the entire sim is offscreen
+    fn timing(frame: u64, start: Instant, frame_timer: &mut Instant) {
+        optick::event!();
+
+        let elapsed = frame_timer.elapsed();
         let remaining_frame_time = (FRAME_TIME_MS - elapsed.as_millis_f64()).max(0.0);
 
-        std::thread::sleep(std::time::Duration::from_millis(
-            remaining_frame_time as u64,
-        ));
-
-        // If reached end of last_frame_times, reset n_frame_timer
-        if sim_data.frame % TARGET_FPS as u64 == 0 {
-            *n_frame_timer = Instant::now();
+        info!(
+            "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
+            start.elapsed().div(frame as u32)
+        );
+        if remaining_frame_time > MS_BUFFER {
+            let with_buffer = (remaining_frame_time - MS_BUFFER);
+            std::thread::sleep(Duration::from_millis(with_buffer as u64));
         }
-        last_frame_times[sim_data.frame as usize % TARGET_FPS as usize] = elapsed.as_secs_f64();
-
-        if sim_data.frame % TARGET_FPS as u64 == TARGET_FPS as u64 - 1 {
-            let avg_frame_time = n_frame_timer.elapsed().div_f64(TARGET_FPS);
-            trace!("Avg Frame time: {avg_frame_time:?}",);
-            info!(
-                "FPS: {:?}",
-                Duration::from_secs(1).div_duration_f64(avg_frame_time)
-            );
-        }
+        *frame_timer = Instant::now();
     }
 }

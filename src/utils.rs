@@ -12,6 +12,7 @@ pub const MOUSE_OUTLINE: Rgba = Rgba::from_rgb(40, 255, 40);
 // simulation constants (gravity_sim.rs)
 pub const MULTIPLIER: f64 = 2.0;
 pub const RESISTANCE: f64 = 0.99;
+pub const INIT_PARTICLES: usize = 200_000;
 
 // init (main.rs)
 pub const INIT_WIDTH: u32 = 800;
@@ -23,8 +24,9 @@ pub const SIM_MAX_SCALE: u32 = 10;
 
 // timing (app.rs)
 pub const KEY_COOLDOWN_MS: u64 = 100;
-pub const TARGET_FPS: f64 = 144.0;
+pub const TARGET_FPS: f64 = 60.0;
 pub const FRAME_TIME_MS: f64 = 1000.0 / TARGET_FPS;
+pub const MS_BUFFER: f64 = 3.0;
 
 macro_rules! create_vec2 {
     ($name:ident, $param1:ident, $param2: ident) => {
