@@ -1,5 +1,21 @@
 #![feature(duration_millis_float)]
-#![allow(unused)]
+#![warn(
+    // clippy::all,
+    // clippy::restriction,
+    // clippy::pedantic,
+    // clippy::nursery,
+    // clippy::cargo
+)]
+#![allow(
+    unused,
+    clippy::identity_op,
+    clippy::mut_from_ref,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::single_call_fn
+)]
 
 mod app;
 mod backend;
@@ -9,7 +25,7 @@ mod gravity_sim;
 mod utils;
 
 use crate::{app::App, cell_sim::CellSim, gravity_sim::GravitySim};
-use utils::{WindowSize, INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
+use utils::{INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
 
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");

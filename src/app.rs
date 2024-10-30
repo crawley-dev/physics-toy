@@ -1,19 +1,16 @@
 use crate::{
     backend::Backend,
-    frontend::{Frontend, SimData},
+    frontend::Frontend,
     utils::{
         Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
-        TARGET_FPS,
     },
 };
-use log::*;
+use log::{info, trace, warn};
 use std::{
     mem::transmute,
-    ops::{Div, Sub},
     time::{Duration, Instant},
 };
 use winit::{
-    dpi::Size,
     event::{ElementState, KeyEvent, MouseButton},
     event::{Event, WindowEvent},
     event_loop::{EventLoop, EventLoopWindowTarget},
@@ -31,7 +28,7 @@ pub struct InputData {
 }
 
 impl InputData {
-    pub fn is_pressed(&self, key: KeyCode) -> bool {
+    pub const fn is_pressed(&self, key: KeyCode) -> bool {
         self.keys_pressed[key as usize]
     }
 }
@@ -61,7 +58,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         (event_loop, window)
     }
 
-    pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: F) -> App<'a, F> {
+    pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: F) -> Self {
         let backend = pollster::block_on(Backend::new(window, frontend.get_sim_data()));
 
         App {
@@ -81,7 +78,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
     // TODO(TOM): use matches! macro more , its INCREDIBLE
 
     pub fn run(mut self) {
-        let mut start = Instant::now();
+        let start = Instant::now();
         let mut frame_timer = start;
         self.event_loop
             .run(move |event, control_flow| match event {
@@ -140,7 +137,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                 },
                 _ => {}
             })
-            .unwrap()
+            .unwrap();
     }
 
     fn register_keyboard_input(
@@ -240,19 +237,19 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
 
         trace!(
             "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
-            start.elapsed().div(frame as u32)
+            start.elapsed() / frame as u32
         );
 
         // avg frametime
         if frame % 60 == 0 {
             info!(
                 "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
-                start.elapsed().div(frame as u32)
+                start.elapsed() / frame as u32
             );
         }
 
         if remaining_frame_time > MS_BUFFER {
-            let with_buffer = (remaining_frame_time - MS_BUFFER);
+            let with_buffer = remaining_frame_time - MS_BUFFER;
             std::thread::sleep(Duration::from_millis(with_buffer as u64));
         }
         *frame_timer = Instant::now();

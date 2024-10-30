@@ -1,38 +1,17 @@
-use std::{cell::UnsafeCell, sync::Arc, time::Instant};
-
-use bytemuck::from_bytes_mut;
-use log::*;
+use log::{info, trace};
 use num::pow::Pow;
 use rand::random;
-use rayon::{prelude::*, ThreadPool};
-use wgpu::BufferSize;
+use rayon::prelude::*;
 use winit::keyboard::KeyCode;
 
 use crate::{
     app::InputData,
-    frontend::{Frontend, SimData},
+    frontend::{Frontend, SimData, SyncCell},
     utils::{
         GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, BACKGROUND, INIT_DRAW_SIZE,
         INIT_PARTICLES, MOUSE_OUTLINE, MULTIPLIER, RESISTANCE, TARGET_FPS, WHITE,
     },
 };
-
-// Used as buf accesses don't need to be thread safe, enables parallel rendering.
-struct SyncCell<T>(UnsafeCell<T>);
-unsafe impl<T> Sync for SyncCell<T> where T: Send {}
-impl<T> SyncCell<T> {
-    fn new(val: T) -> Self {
-        Self(UnsafeCell::new(val))
-    }
-
-    fn get(&self) -> &T {
-        unsafe { &*self.0.get() }
-    }
-
-    fn get_mut(&self) -> &mut T {
-        unsafe { &mut *self.0.get() }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 struct Particle {
@@ -70,7 +49,7 @@ impl Frontend for GravitySim {
     // region: Utilitys
     fn get_sim_data(&self) -> SimData {
         let buf = &self.bufs[self.front_buffer];
-        let buf_slice = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
+        let buf_slice = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) };
         SimData {
             texture_buf: buf_slice,
             size: self.sim_size,
@@ -111,13 +90,13 @@ impl Frontend for GravitySim {
 
     fn draw(&mut self, mouse: WindowPos<f64>) {
         // draw is already bounded by the window size, so no need to check bounds here.
-        let game = mouse.to_game(self.state.scale as f64);
+        let game = mouse.to_game(f64::from(self.state.scale));
         self.state
             .draw_shape
             .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
                 // TODO(TOM): calc area/draw calls, pre-alloc them
                 self.particles.push(Particle {
-                    pos: game.add(off_x as f64, off_y as f64),
+                    pos: game.add(f64::from(off_x), f64::from(off_y)),
                     vel: (1.0, 1.0).into(),
                     mass: 1.0,
                     radius: 1.0,
@@ -159,7 +138,7 @@ impl Frontend for GravitySim {
     }
 
     fn clear_sim(&mut self) {
-        self.particles.clear()
+        self.particles.clear();
     }
     // endregion
     // region: Update
@@ -180,10 +159,10 @@ impl Frontend for GravitySim {
             self.camera.x += 1.0;
         }
 
-        let mut prev_mouse = self.prev_state.mouse.to_game(self.state.scale as f64);
+        let mut prev_mouse = self.prev_state.mouse.to_game(f64::from(self.state.scale));
         prev_mouse.x -= self.camera.x; // Normalise cursor position to viewport
         prev_mouse.y -= self.camera.y;
-        let mut mouse = self.state.mouse.to_game(self.state.scale as f64);
+        let mut mouse = self.state.mouse.to_game(f64::from(self.state.scale));
         mouse.x -= self.camera.x; // Normalise cursor position to viewport
         mouse.y -= self.camera.y;
 
@@ -193,27 +172,27 @@ impl Frontend for GravitySim {
                 optick::event!("Resetting texture");
                 self.bufs[self.front_buffer]
                     .iter_mut()
-                    .for_each(|x| unsafe { *x.get_mut() = 44 });
+                    .for_each(|x| *x.get_mut() = 44);
             }
             self.update_sim(mouse);
         }
 
         Self::render_particles(
-            &mut self.bufs[self.front_buffer],
-            &mut self.particles,
+            &self.bufs[self.front_buffer],
+            &self.particles,
             self.sim_size,
         );
 
         {
             optick::event!("Drawing Mouse Outline");
             if prev_mouse != mouse {
-                self.clear_last_mouse_outline(prev_mouse);
+                self.clear_last_mouse_outline(prev_mouse, MOUSE_OUTLINE);
+                self.render_mouse_outline(mouse, MOUSE_OUTLINE);
             }
         }
-        self.render_mouse_outline(mouse, MOUSE_OUTLINE);
 
         if self.state.frame % TARGET_FPS as u64 == 0 {
-            info!("Particles: {}", self.particles.len());
+            trace!("Particles: {}", self.particles.len());
         }
 
         self.prev_state = self.state;
@@ -226,6 +205,141 @@ impl Frontend for GravitySim {
 }
 
 impl GravitySim {
+    fn update_sim(&mut self, mouse: GamePos<f64>) {
+        optick::event!("Physics Update");
+
+        // All particles attract to mouse.
+        self.particles.par_iter_mut().for_each(|p| {
+            let dist = p.pos.sub(mouse.x, mouse.y);
+            let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
+
+            // If collapsing in on cursor, give it some velocity.
+            if abs_dist > 5.0 {
+                let normal = p
+                    .pos
+                    .sub(mouse.x, mouse.y)
+                    .mul_uni(1.0 / abs_dist)
+                    .mul_uni(MULTIPLIER);
+
+                p.vel.x -= normal.x as f32;
+                p.vel.y -= normal.y as f32;
+            } else {
+                let mut tx = -1.0;
+                let mut ty = -1.0;
+                if p.vel.x < 0.0 {
+                    tx = 1.0;
+                }
+                if p.vel.y < 0.0 {
+                    ty = 1.0;
+                }
+                p.vel.x += tx;
+                p.vel.y += ty;
+            }
+            p.vel.x *= RESISTANCE as f32;
+            p.vel.y *= RESISTANCE as f32;
+
+            p.pos.x += f64::from(p.vel.x);
+            p.pos.y += f64::from(p.vel.y);
+        });
+    }
+
+    fn render_particles(
+        texture_buf: &[SyncCell<u8>],
+        particles: &[Particle],
+        sim_size: GameSize<u32>,
+    ) {
+        optick::event!("Update Texture Buffer");
+        particles
+            .par_iter()
+            .filter(|p| {
+                p.pos.x >= 0.0
+                    && p.pos.x < f64::from(sim_size.width - 1)
+                    && p.pos.y >= 0.0
+                    && p.pos.y < f64::from(sim_size.height - 1)
+            })
+            .for_each(|p| {
+                let index = 4 * (p.pos.y as u32 * sim_size.width + p.pos.x as u32) as usize;
+
+                *texture_buf[index + 0].get_mut() = WHITE.r;
+                *texture_buf[index + 1].get_mut() = WHITE.g;
+                *texture_buf[index + 2].get_mut() = WHITE.b;
+                *texture_buf[index + 3].get_mut() = WHITE.a;
+            });
+
+        // TODO(TOM): this will work for cellular automata (ish), but not for particles
+        // particles
+        //     .par_iter()
+        //     .zip(texture_buf.par_chunks_exact_mut(4))
+        //     .filter(|(p, c)| {
+        //         p.pos.x >= 0.0
+        //             && p.pos.x < (sim_size.width - 1) as f64
+        //             && p.pos.y >= 0.0
+        //             && p.pos.y < (sim_size.height - 1) as f64
+        //     })
+        //     .for_each(|(p, c)| {
+        //         c[0] = WHITE.r;
+        //         c[1] = WHITE.g;
+        //         c[2] = WHITE.b;
+        //         c[3] = WHITE.a;
+        //     });
+    }
+
+    // TODO(TOM): make this a separate texture layer, overlayed on top of the sim
+    fn render_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+        optick::event!("Rendering Mouse Outline");
+
+        //TODO(TOM): not properly clearing mouse outline on size change
+        self.state
+            .draw_shape
+            .draw(self.state.draw_size, |off_x, off_y| {
+                let pos = mouse.add(f64::from(off_x), f64::from(off_y)).clamp(
+                    0.0,
+                    0.0,
+                    f64::from(self.sim_size.width - 1),
+                    f64::from(self.sim_size.height - 1),
+                );
+                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+
+                let buf = &mut self.bufs[self.front_buffer];
+                *buf[index + 0].get_mut() = colour.r;
+                *buf[index + 1].get_mut() = colour.g;
+                *buf[index + 2].get_mut() = colour.b;
+                *buf[index + 3].get_mut() = colour.a;
+            });
+    }
+
+    // TODO(TOM): this function proper doesn't work with back buffers
+    fn clear_last_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+        self.prev_state
+            .draw_shape
+            .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
+                let pos = mouse.add(f64::from(off_x), f64::from(off_y)).clamp(
+                    0.0,
+                    0.0,
+                    f64::from(self.sim_size.width - 1),
+                    f64::from(self.sim_size.height - 1),
+                );
+                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+
+                let buf = &mut self.bufs[self.front_buffer];
+                if *buf[index + 0].get_mut() == colour.r
+                    && *buf[index + 1].get_mut() == colour.g
+                    && *buf[index + 2].get_mut() == colour.b
+                    && *buf[index + 3].get_mut() == colour.a
+                {
+                    *buf[index + 0].get_mut() = BACKGROUND.r;
+                    *buf[index + 1].get_mut() = BACKGROUND.g;
+                    *buf[index + 2].get_mut() = BACKGROUND.b;
+                    *buf[index + 3].get_mut() = BACKGROUND.a;
+                } else {
+                    *buf[index + 0].get_mut() = *buf[index + 0].get();
+                    *buf[index + 1].get_mut() = *buf[index + 1].get();
+                    *buf[index + 2].get_mut() = *buf[index + 2].get();
+                    *buf[index + 3].get_mut() = *buf[index + 3].get();
+                }
+            });
+    }
+
     pub fn new(size: WindowSize<u32>, scale: u32) -> Self {
         // let thread_pool = rayon::ThreadPoolBuilder::new()
         //     .num_threads(1)
@@ -277,146 +391,5 @@ impl GravitySim {
             front_buffer: 0,
             particles,
         }
-    }
-
-    fn update_sim(&mut self, mouse: GamePos<f64>) {
-        optick::event!("Physics Update");
-
-        // All particles attract to mouse.
-        self.particles.par_iter_mut().for_each(|p| {
-            let mut dist = p.pos.sub(mouse.x, mouse.y);
-            let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
-
-            // If collapsing in on cursor, give it some velocity.
-            if abs_dist > 5.0 {
-                let normal = p
-                    .pos
-                    .sub(mouse.x, mouse.y)
-                    .mul_uni(1.0 / abs_dist)
-                    .mul_uni(MULTIPLIER);
-
-                p.vel.x -= normal.x as f32;
-                p.vel.y -= normal.y as f32;
-            } else {
-                let mut tx = -1.0;
-                let mut ty = -1.0;
-                if p.vel.x < 0.0 {
-                    tx = 1.0;
-                }
-                if p.vel.y < 0.0 {
-                    ty = 1.0;
-                }
-                p.vel.x += tx;
-                p.vel.y += ty;
-            }
-            p.vel.x *= RESISTANCE as f32;
-            p.vel.y *= RESISTANCE as f32;
-
-            p.pos.x += p.vel.x as f64;
-            p.pos.y += p.vel.y as f64;
-        });
-    }
-
-    fn render_particles(
-        texture_buf: &mut [SyncCell<u8>],
-        particles: &mut [Particle],
-        sim_size: GameSize<u32>,
-    ) {
-        optick::event!("Update Texture Buffer");
-        particles
-            .par_iter()
-            .filter(|p| {
-                p.pos.x >= 0.0
-                    && p.pos.x < (sim_size.width - 1) as f64
-                    && p.pos.y >= 0.0
-                    && p.pos.y < (sim_size.height - 1) as f64
-            })
-            .for_each(|p| {
-                let index = 4 * (p.pos.y as u32 * sim_size.width + p.pos.x as u32) as usize;
-
-                unsafe {
-                    *texture_buf[index + 0].get_mut() = WHITE.r;
-                    *texture_buf[index + 1].get_mut() = WHITE.g;
-                    *texture_buf[index + 2].get_mut() = WHITE.b;
-                    *texture_buf[index + 3].get_mut() = WHITE.a;
-                }
-            });
-
-        // TODO(TOM): this will work for cellular automata (ish), but not for particles
-        // particles
-        //     .par_iter()
-        //     .zip(texture_buf.par_chunks_exact_mut(4))
-        //     .filter(|(p, c)| {
-        //         p.pos.x >= 0.0
-        //             && p.pos.x < (sim_size.width - 1) as f64
-        //             && p.pos.y >= 0.0
-        //             && p.pos.y < (sim_size.height - 1) as f64
-        //     })
-        //     .for_each(|(p, c)| {
-        //         c[0] = WHITE.r;
-        //         c[1] = WHITE.g;
-        //         c[2] = WHITE.b;
-        //         c[3] = WHITE.a;
-        //     });
-    }
-
-    // TODO(TOM): make this a separate texture layer, overlayed on top of the sim
-    fn render_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
-        optick::event!("Rendering Mouse Outline");
-
-        //TODO(TOM): not properly clearing mouse outline on size change
-        self.state
-            .draw_shape
-            .draw(self.state.draw_size, |off_x, off_y| {
-                let pos = mouse.add(off_x as f64, off_y as f64).clamp(
-                    0.0,
-                    0.0,
-                    (self.sim_size.width - 1) as f64,
-                    (self.sim_size.height - 1) as f64,
-                );
-                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
-
-                let buf = &mut self.bufs[self.front_buffer];
-                unsafe {
-                    *buf[index + 0].get_mut() = MOUSE_OUTLINE.r;
-                    *buf[index + 1].get_mut() = MOUSE_OUTLINE.g;
-                    *buf[index + 2].get_mut() = MOUSE_OUTLINE.b;
-                    *buf[index + 3].get_mut() = MOUSE_OUTLINE.a;
-                }
-            });
-    }
-
-    // TODO(TOM): this function proper doesn't work with back buffers
-    fn clear_last_mouse_outline(&mut self, mouse: GamePos<f64>) {
-        self.prev_state
-            .draw_shape
-            .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
-                let pos = mouse.add(off_x as f64, off_y as f64).clamp(
-                    0.0,
-                    0.0,
-                    (self.sim_size.width - 1) as f64,
-                    (self.sim_size.height - 1) as f64,
-                );
-                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
-
-                let buf = &mut self.bufs[self.front_buffer];
-                unsafe {
-                    if *buf[index + 0].get_mut() == MOUSE_OUTLINE.r
-                        && *buf[index + 1].get_mut() == MOUSE_OUTLINE.g
-                        && *buf[index + 2].get_mut() == MOUSE_OUTLINE.b
-                        && *buf[index + 3].get_mut() == MOUSE_OUTLINE.a
-                    {
-                        *buf[index + 0].get_mut() = BACKGROUND.r;
-                        *buf[index + 1].get_mut() = BACKGROUND.g;
-                        *buf[index + 2].get_mut() = BACKGROUND.b;
-                        *buf[index + 3].get_mut() = BACKGROUND.a;
-                    } else {
-                        *buf[index + 0].get_mut() = *buf[index + 0].get();
-                        *buf[index + 1].get_mut() = *buf[index + 1].get();
-                        *buf[index + 2].get_mut() = *buf[index + 2].get();
-                        *buf[index + 3].get_mut() = *buf[index + 3].get();
-                    }
-                }
-            });
     }
 }

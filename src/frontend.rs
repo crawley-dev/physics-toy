@@ -1,12 +1,27 @@
-use educe::Educe;
-use std::time::Instant;
-
-use winit::dpi::Size;
-
 use crate::{
     app::InputData,
     utils::{GameSize, Shape, WindowPos, WindowSize},
 };
+use educe::Educe;
+use std::cell::UnsafeCell;
+
+// This is because buf accesses don't need to be thread safe, enables parallel rendering.
+// UnsafeCell doesn't have any sync gurantees, so we have to create a wrapper
+pub struct SyncCell<T>(UnsafeCell<T>);
+unsafe impl<T> Sync for SyncCell<T> where T: Send {}
+impl<T> SyncCell<T> {
+    pub const fn new(val: T) -> Self {
+        Self(UnsafeCell::new(val))
+    }
+
+    pub fn get(&self) -> &T {
+        unsafe { &*self.0.get() }
+    }
+
+    pub fn get_mut(&self) -> &mut T {
+        unsafe { &mut *self.0.get() }
+    }
+}
 
 #[derive(Educe)]
 #[educe(Debug)]

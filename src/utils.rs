@@ -30,7 +30,7 @@ pub const MS_BUFFER: f64 = 3.0;
 
 macro_rules! create_vec2 {
     ($name:ident, $param1:ident, $param2: ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub struct $name<T: Num + Copy> {
             pub $param1: T,
             pub $param2: T,
@@ -193,6 +193,7 @@ impl<T: Num + Copy> WindowSize<T> {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)] // don't match shape, I index into it (app::handle_inputs)
 pub enum Shape {
     CircleOutline,
     CircleFill,
@@ -201,9 +202,9 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub fn draw<F: FnMut(i32, i32)>(&self, size: u32, mut lambda: F) {
+    pub fn draw<F: FnMut(i32, i32)>(self, size: u32, mut lambda: F) {
         match self {
-            Shape::CircleOutline => {
+            Self::CircleOutline => {
                 let mut x = 0;
                 let mut y = size as i32;
                 let mut d = 3 - 2 * size as i32;
@@ -229,7 +230,7 @@ impl Shape {
                     draw_circle(x, y);
                 }
             }
-            Shape::CircleFill => {
+            Self::CircleFill => {
                 let mut x = 0;
                 let mut y = size as i32;
                 let mut d = 3 - 2 * size as i32;
@@ -256,7 +257,7 @@ impl Shape {
                     draw_circle(x, y);
                 }
             }
-            Shape::SquareCentered => {
+            Self::SquareCentered => {
                 let half = (size / 2) as i32;
                 for y_off in -(half)..(half) {
                     for x_off in -(half)..(half) {
@@ -264,7 +265,7 @@ impl Shape {
                     }
                 }
             }
-            Shape::Count => {
+            Self::Count => {
                 panic!("Shape::Count is not a valid shape");
             }
         }
@@ -279,8 +280,9 @@ pub struct Rgba {
     pub a: u8,
 }
 
+#[allow(dead_code)] // maybe one day I will use this
 impl Rgba {
-    pub const fn as_u32(&self) -> u32 {
+    pub const fn as_u32(self) -> u32 {
         (self.r as u32) << 24 | (self.g as u32) << 16 | (self.b as u32) << 8 | self.a as u32
     }
 
