@@ -336,18 +336,18 @@ impl GravitySim {
             .map(|p| p.get_mut())
             .map(|p| (p.pos.sub(camera.x, camera.y), p.radius))
             .filter(|(pos, radius)| {
-                !(pos.x < 0.0
-                    || pos.y < 0.0
-                    || pos.x >= f64::from(sim_size.width)
-                    || pos.y >= f64::from(sim_size.height))
+                !(pos.x + radius < 0.0
+                    || pos.y + radius < 0.0
+                    || pos.x + radius >= f64::from(sim_size.width)
+                    || pos.y + radius >= f64::from(sim_size.height))
             })
             .for_each(|(pos, radius)| {
                 Shape::CircleOutline.draw(radius as u32, |off_x: i32, off_y: i32| {
                     let offset = pos.add(f64::from(off_x), f64::from(off_y));
-                    if offset.x > 0.0
-                        && offset.y > 0.0
-                        && offset.x < f64::from(sim_size.width - 1)
-                        && offset.y < f64::from(sim_size.height - 1)
+                    if !(offset.x < 0.0
+                        || offset.y < 0.0
+                        || offset.x >= f64::from(sim_size.width)
+                        || offset.y >= f64::from(sim_size.height))
                     {
                         let index =
                             4 * (offset.y as u32 * sim_size.width + offset.x as u32) as usize;
