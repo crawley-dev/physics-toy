@@ -2,7 +2,7 @@ use crate::{
     backend::Backend,
     frontend::Frontend,
     utils::{
-        Shape, WindowPos, WindowSize, CAMERA_SPEED, FRAME_TIME_MS, KEY_COOLDOWN_MS,
+        GamePos, Shape, WindowPos, WindowSize, CAMERA_SPEED, FRAME_TIME_MS, KEY_COOLDOWN_MS,
         MOUSE_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
     },
 };
@@ -40,6 +40,9 @@ pub struct InputData {
 impl InputData {
     pub const fn is_pressed(&self, key: KeyCode) -> bool {
         self.keys_pressed[key as usize]
+    }
+    pub const fn is_held(&self, key: KeyCode) -> bool {
+        self.keys_held[key as usize]
     }
 }
 
@@ -120,6 +123,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             }
                         }
                         ElementState::Released => {
+                            // NOTE: a match for element state blocks mouse_held, for some reason??
                             self.inputs.mouse_held = false;
                         }
                     },
@@ -175,7 +179,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             }
             PhysicalKey::Code(code) => {
                 let code = code as usize;
-                if code > 256 {
+                if code > 255 {
                     return;
                 }
                 match event.state {
@@ -231,16 +235,21 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             backend.resize_texture(&frontend.get_sim_data());
         }
 
-        if inputs.is_pressed(KeyCode::KeyW) {
-            // swapped due to inverted y axis
-            frontend.change_camera_pos_y(CAMERA_SPEED);
-        } else if inputs.is_pressed(KeyCode::KeyS) {
-            frontend.change_camera_pos_y(-CAMERA_SPEED);
+        let mut camera_accel: GamePos<f64> = (0.0, 0.0).into();
+        if inputs.is_held(KeyCode::KeyW) {
+            camera_accel.y -= CAMERA_SPEED;
         }
-        if inputs.is_pressed(KeyCode::KeyA) {
-            frontend.change_camera_pos_x(-CAMERA_SPEED);
-        } else if inputs.is_pressed(KeyCode::KeyD) {
-            frontend.change_camera_pos_x(CAMERA_SPEED);
+        if inputs.is_held(KeyCode::KeyS) {
+            camera_accel.y += CAMERA_SPEED;
+        }
+        if inputs.is_held(KeyCode::KeyA) {
+            camera_accel.x -= CAMERA_SPEED;
+        }
+        if inputs.is_held(KeyCode::KeyD) {
+            camera_accel.x += CAMERA_SPEED;
+        }
+        if camera_accel != (0.0, 0.0).into() {
+            frontend.change_camera_vel(camera_accel);
         }
 
         // Draw Size on ArrowUp and ArrowDown
@@ -260,7 +269,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             }
         }
 
-        // zero out inputs.keys_tapped each frame
+        // zero out "pressed" each frame
         inputs.mouse_pressed = false;
         inputs.keys_pressed = [false; 256];
     }

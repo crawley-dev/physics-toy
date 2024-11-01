@@ -113,8 +113,7 @@ impl Frontend for CellSim {
     }
     // endregion
     // region: Camera
-    fn change_camera_pos_x(&mut self, delta: f64) {}
-    fn change_camera_pos_y(&mut self, delta: f64) {}
+    fn change_camera_vel(&mut self, delta: GamePos<f64>) {}
     // endregion
     // region: Sim Manipulation
     // TODO(TOM): resize from the centre of the screen, not the top left || from mouse with scroll wheel.

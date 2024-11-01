@@ -24,7 +24,7 @@ pub const INIT_SCALE: u32 = 3;
 pub const INIT_DRAW_SIZE: u32 = 8;
 pub const INIT_TITLE: &str = "Gravity Sim";
 pub const SIM_MAX_SCALE: u32 = 10;
-pub const CAMERA_SPEED: f64 = 2.0;
+pub const CAMERA_SPEED: f64 = 0.1;
 
 // timing (app.rs)
 pub const MOUSE_COOLDOWN_MS: u64 = 250;

@@ -57,6 +57,7 @@ pub struct GravitySim {
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
     camera: GamePos<f64>, // describes the top left of the viewport.
+    camera_vel: GamePos<f64>,
     bufs: [Vec<SyncCell<u8>>; 2],
     front_buffer: usize,
     particles: Vec<SyncCell<Particle>>,
@@ -97,7 +98,6 @@ impl Frontend for GravitySim {
     // endregion
     // region: Drawing
     fn change_draw_shape(&mut self, shape: Shape) {
-        info!("{:?} => {:?}", self.state.draw_shape, shape);
         self.state.draw_shape = shape;
     }
 
@@ -106,36 +106,23 @@ impl Frontend for GravitySim {
     }
 
     fn draw(&mut self, mouse: WindowPos<f64>) {
-        let game = mouse.to_game(f64::from(self.state.scale));
+        let world = mouse
+            .to_game(f64::from(self.state.scale))
+            .add(self.camera.x, self.camera.y);
         self.particles.push(SyncCell::new(Particle {
-            pos: game,
+            pos: world,
             vel: (-0.3, 0.5).into(),
             mass: 5.972e14,
             radius: 6.371,
         }));
-        // self.state
-        //     .draw_shape
-        //     .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
-        //         // TODO(TOM): calc area/draw calls, pre-alloc them
-        //         self.particles.push(SyncCell::new(Particle {
-        //             pos: game.add(f64::from(off_x), f64::from(off_y)),
-        //             vel: (1.0, 1.0).into(),
-        //             mass: 1.0,
-        //             radius: 1.0,
-        //         }));
-        //     });
     }
     // endregion
     // region: Camera
-    fn change_camera_pos_x(&mut self, delta: f64) {
-        self.camera.x += delta / f64::from(self.state.scale);
-        info!("Camera: {:?}", self.camera);
+    fn change_camera_vel(&mut self, delta: GamePos<f64>) {
+        info!("Camera vel: {:.2?} + {:.2?}", self.camera_vel, delta);
+        self.camera_vel = self.camera_vel.add(delta.x, delta.y);
     }
 
-    fn change_camera_pos_y(&mut self, delta: f64) {
-        self.camera.y += delta / f64::from(self.state.scale);
-        info!("Camera: {:?}", self.camera);
-    }
     // endregion
     // region: Sim Manipultion
     fn resize_sim(&mut self, window: WindowSize<u32>) {
@@ -179,25 +166,24 @@ impl Frontend for GravitySim {
         optick::event!("GravitySim::update");
 
         self.state.mouse = inputs.mouse;
+        self.camera = self.camera.add(self.camera_vel.x, self.camera_vel.y);
+        self.camera_vel = self.camera_vel.map(|n| n * 0.97); // add some resistance
 
+        {
+            optick::event!("Resetting texture");
+            self.bufs[self.front_buffer]
+                .iter_mut()
+                .for_each(|x| *x.get_mut() = 44);
+        }
         if self.state.running || self.state.step_sim {
             // TODO(TOM): delta updates, use 2 buffers!
-            {
-                optick::event!("Resetting texture");
-                self.bufs[self.front_buffer]
-                    .iter_mut()
-                    .for_each(|x| *x.get_mut() = 44);
-            }
             self.update_physics();
-            // info!("Particles: {:#?}", self.particles);
         }
-
         Self::render_particles(
             &self.bufs[self.front_buffer],
             &self.particles,
             self.sim_size,
-            // self.camera,
-            (0.0, 0.0).into(),
+            self.camera,
         );
 
         {
@@ -273,7 +259,7 @@ impl GravitySim {
             if p1.mass == 0.0 {
                 continue;
             }
-            for (j, p2) in self.particles.iter().enumerate() {
+            for (j, p2) in self.particles.iter().enumerate().skip(i) {
                 let p2 = p2.get_mut();
                 if i == j || p2.mass == 0.0 {
                     continue;
@@ -283,9 +269,7 @@ impl GravitySim {
                 let dist = p2.pos.sub(p1.pos.x, p1.pos.y);
                 let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
 
-                // get smaller radius
-                let max_radius = p1.radius.max(p2.radius);
-                if abs_dist < 0.95 * max_radius {
+                if abs_dist < 0.95 * p1.radius.max(p2.radius) {
                     // collide entities
                     let consumer_pos = if p1.mass > p2.mass { p1.pos } else { p2.pos };
                     let new_mass = p1.mass + p2.mass;
@@ -303,7 +287,7 @@ impl GravitySim {
                         radius: new_radius,
                     };
 
-                    // will be culled.
+                    // will be culled later.
                     *p2 = Particle {
                         pos: (f64::MIN, f64::MIN).into(),
                         vel: (0.0, 0.0).into(),
@@ -311,7 +295,8 @@ impl GravitySim {
                         radius: 0.0,
                     };
                 } else {
-                    // calc physics like normal
+                    // calc physics
+                    // TODO(TOM): 100% excess calculations, gravity gets stronger the more particles there are.
                     let p1_unit_vector = dist.map(|n| n / abs_dist);
 
                     let abs_force = GRAV_CONST * (p1.mass * p2.mass) as f64 / abs_dist.pow(2.0);
@@ -332,6 +317,7 @@ impl GravitySim {
             }
         }
 
+        // TODO(TOM): ideally cull particles in the same loop, mutability & iterator validity issues.
         self.particles
             .retain(|p| p.get().mass != 0.0 && p.get().radius != 0.0);
     }
@@ -344,29 +330,34 @@ impl GravitySim {
         camera: GamePos<f64>,
     ) {
         optick::event!("Update Texture Buffer");
+        // for (i, p) in particles.iter().enumerate() {
         particles
-            .par_iter()
+            .iter()
             .map(|p| p.get_mut())
-            .filter(|p| {
-                p.pos.x >= camera.x
-                    && p.pos.x < f64::from(sim_size.width - 1) + camera.x
-                    && p.pos.y >= camera.y
-                    && p.pos.y < f64::from(sim_size.height - 1) + camera.y
+            .map(|p| (p.pos.sub(camera.x, camera.y), p.radius))
+            .filter(|(pos, radius)| {
+                !(pos.x < 0.0
+                    || pos.y < 0.0
+                    || pos.x >= f64::from(sim_size.width)
+                    || pos.y >= f64::from(sim_size.height))
             })
-            .for_each(|p| {
-                Shape::CircleOutline.draw(p.radius as u32, |off_x: i32, off_y: i32| {
-                    let off_pos = p.pos.add(f64::from(off_x), f64::from(off_y)).clamp(
-                        camera,
-                        sim_size.to_pos().map(|n| n as f64 - 1.0), // .add(camera.x, camera.y),
-                    );
+            .for_each(|(pos, radius)| {
+                Shape::CircleOutline.draw(radius as u32, |off_x: i32, off_y: i32| {
+                    let offset = pos.add(f64::from(off_x), f64::from(off_y));
+                    if offset.x > 0.0
+                        && offset.y > 0.0
+                        && offset.x < f64::from(sim_size.width - 1)
+                        && offset.y < f64::from(sim_size.height - 1)
+                    {
+                        let index =
+                            4 * (offset.y as u32 * sim_size.width + offset.x as u32) as usize;
 
-                    let index = 4 * (off_pos.y as u32 * sim_size.width + off_pos.x as u32) as usize;
-
-                    *texture_buf[index + 0].get_mut() = WHITE.r;
-                    *texture_buf[index + 1].get_mut() = WHITE.g;
-                    *texture_buf[index + 2].get_mut() = WHITE.b;
-                    *texture_buf[index + 3].get_mut() = WHITE.a;
-                });
+                        *texture_buf[index + 0].get_mut() = WHITE.r;
+                        *texture_buf[index + 1].get_mut() = WHITE.g;
+                        *texture_buf[index + 2].get_mut() = WHITE.b;
+                        *texture_buf[index + 3].get_mut() = WHITE.a;
+                    }
+                })
             });
     }
 
@@ -452,6 +443,12 @@ impl GravitySim {
             mass: 1.989e20,
             radius: 69.6340,
         }));
+        particles.push(SyncCell::new(Particle {
+            pos: (550.0, 550.0).into(),
+            vel: (0.0, 0.0).into(),
+            mass: 1.989e20,
+            radius: 69.6340,
+        }));
 
         // let rand = random::<u64>() % 10_000;
         // let mut particles = Vec::with_capacity(INIT_PARTICLES);
@@ -481,6 +478,7 @@ impl GravitySim {
             window_size: size,
             sim_size,
             camera: (0.0, 0.0).into(),
+            camera_vel: (0.0, 0.0).into(),
             bufs: [buf, buf_clone],
             front_buffer: 0,
             particles,

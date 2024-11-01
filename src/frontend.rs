@@ -1,6 +1,6 @@
 use crate::{
     app::InputData,
-    utils::{GameSize, Shape, WindowPos, WindowSize},
+    utils::{GamePos, GameSize, Shape, WindowPos, WindowSize},
 };
 use educe::Educe;
 use std::cell::UnsafeCell;
@@ -52,8 +52,7 @@ pub trait Frontend {
     fn change_draw_size(&mut self, delta: i32);
     fn draw(&mut self, pos: WindowPos<f64>);
 
-    fn change_camera_pos_x(&mut self, delta: f64);
-    fn change_camera_pos_y(&mut self, delta: f64);
+    fn change_camera_vel(&mut self, delta: GamePos<f64>);
 
     fn resize_sim(&mut self, window: WindowSize<u32>);
     fn rescale_sim(&mut self, scale: u32);
