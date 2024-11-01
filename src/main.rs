@@ -8,13 +8,13 @@
 )]
 #![allow(
     unused,
-    clippy::identity_op,
-    clippy::mut_from_ref,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation,
-    clippy::single_call_fn
+    // clippy::identity_op,
+    // clippy::mut_from_ref,
+    // clippy::single_call_fn
+    // clippy::cast_sign_loss,
+    // clippy::cast_precision_loss,
+    // clippy::cast_possible_wrap,
+    // clippy::cast_possible_truncation,
 )]
 
 mod app;
@@ -40,7 +40,7 @@ fn main() {
 
     let app = App::new(event_loop, &window, frontend);
 
-    optick::start_capture();
+    // optick::start_capture();
     app.run();
-    optick::stop_capture("captures/toy-physics");
+    // optick::stop_capture("captures/toy-physics");
 }

@@ -1,7 +1,10 @@
 use crate::{
     app::InputData,
     frontend::{Frontend, SimData},
-    utils::{GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, INIT_DRAW_SIZE},
+    utils::{
+        GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, BACKGROUND, GREEN, INIT_DRAW_SIZE,
+        WHITE,
+    },
 };
 use log::{info, trace};
 
@@ -13,20 +16,11 @@ pub enum Material {
 }
 
 impl Material {
-    pub const COLOURS: [Rgba; Self::Count as usize] = [
-        Rgba::from_rgb(44, 44, 44),  // Dead
-        Rgba::from_rgb(50, 255, 50), // Alive
-    ];
     pub const fn get_rgb(self) -> Rgba {
-        // speed and compiler safety
-        if cfg!(debug_assertions) {
-            match self {
-                Self::Dead => Self::COLOURS[0],
-                Self::Alive => Self::COLOURS[1],
-                Self::Count => panic!("Material::Count"),
-            }
-        } else {
-            Self::COLOURS[self as usize]
+        match self {
+            Self::Dead => BACKGROUND,
+            Self::Alive => GREEN,
+            Self::Count => panic!("Material::Count"),
         }
     }
 }
@@ -56,14 +50,14 @@ pub struct CellSim {
     window_size: WindowSize<u32>,
     sim_size: GameSize<u32>,
     sim_buf: Vec<Cell>,
-    texture_buf: Vec<u8>, // TODO(TOM): swap this out for a [u8] buffer.
+    buf: Vec<u8>, // TODO(TOM): swap this out for a [u8] buffer.
 }
 
 impl Frontend for CellSim {
     // region: Utility
     fn get_sim_data(&self) -> SimData<'_> {
         SimData {
-            texture_buf: &self.texture_buf,
+            buf: &self.buf,
             size: self.sim_size,
             frame: self.state.frame,
         }
@@ -105,20 +99,22 @@ impl Frontend for CellSim {
         // draw is already bounded by the window size, so no need to check bounds here.
         let cell = pos.to_game(f64::from(self.state.scale));
 
-        let draw_size = self.state.draw_size;
-        let draw_shape = self.state.draw_shape;
-        let make_cell_alive_lambda = |off_x: i32, off_y: i32| {
-            let off_pos = cell.add(off_x, off_y).clamp(
-                0.0,
-                0.0,
-                f64::from(self.sim_size.width - 1),
-                f64::from(self.sim_size.height - 1),
-            );
-            let off_pos_u32 = (off_pos.x as u32, off_pos.y as u32).into();
-            self.update_cell(off_pos_u32, Material::Alive);
-        };
-        draw_shape.draw(draw_size, make_cell_alive_lambda);
+        self.state
+            .draw_shape
+            .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
+                let off_pos = cell.add(off_x, off_y).clamp(
+                    (0.0, 0.0).into(),
+                    self.sim_size.to_pos().map(|n| n as f64 - 1.0),
+                );
+                let cell = self.get_cell_mut(off_pos.map(|n| n as u32));
+                cell.to_material = Material::Alive;
+                cell.updated = true;
+            });
     }
+    // endregion
+    // region: Camera
+    fn change_camera_pos_x(&mut self, delta: f64) {}
+    fn change_camera_pos_y(&mut self, delta: f64) {}
     // endregion
     // region: Sim Manipulation
     // TODO(TOM): resize from the centre of the screen, not the top left || from mouse with scroll wheel.
@@ -145,7 +141,7 @@ impl Frontend for CellSim {
                     new_sim_buf.push(Cell {
                         material: Material::Dead,
                         updated: false,
-                        to_material: Material::Alive,
+                        to_material: Material::Dead,
                     });
                 } else {
                     new_sim_buf.push(self.sim_buf[self.get_index((x, y).into())]);
@@ -156,7 +152,7 @@ impl Frontend for CellSim {
         self.window_size = window;
         self.sim_size = new_sim_size;
         self.sim_buf = new_sim_buf;
-        self.texture_buf = vec![44; cell_count * 4];
+        self.buf = vec![44; cell_count * 4];
         for y in 0..self.sim_size.height {
             for x in 0..self.sim_size.width {
                 self.update_rgba((x, y).into(), self.get_cell((x, y).into()).material);
@@ -189,11 +185,41 @@ impl Frontend for CellSim {
         if self.state.running || self.state.step_sim {
             self.update_gol();
         }
-        self.render_mouse_outline(self.prev_state.mouse);
-        self.render_mouse_outline(inputs.mouse);
 
-        // blinking draw outline
-        // self.draw(inputs.mouse);
+        for y in 1..self.sim_size.height - 1 {
+            for x in 1..self.sim_size.width - 1 {
+                let cell = self.get_cell((x, y).into());
+                if cell.updated {
+                    info!("updated cell: {x}, {y}");
+                    self.update_cell((x, y).into(), cell.to_material);
+                }
+            }
+        }
+
+        // TODO(TOM): this will work for cellular automata (ish), but not for particles
+        // particles
+        //     .par_iter()
+        //     .zip(texture_buf.par_chunks_exact_mut(4))
+        //     .filter(|(p, c)| {
+        //         p.pos.x >= 0.0
+        //             && p.pos.x < (sim_size.width - 1) as f64
+        //             && p.pos.y >= 0.0
+        //             && p.pos.y < (sim_size.height - 1) as f64
+        //     })
+        //     .for_each(|(p, c)| {
+        //         c[0] = WHITE.r;
+        //         c[1] = WHITE.g;
+        //         c[2] = WHITE.b;
+        //         c[3] = WHITE.a;
+        //     });
+
+        self.clear_last_mouse_outline(
+            self.prev_state
+                .mouse
+                .to_game(f64::from(self.prev_state.scale)),
+            WHITE,
+        );
+        self.render_mouse_outline(self.state.mouse.to_game(f64::from(self.state.scale)), WHITE);
 
         self.prev_state = self.state;
         self.state.step_sim = false;
@@ -203,49 +229,6 @@ impl Frontend for CellSim {
 }
 
 impl CellSim {
-    pub fn new(window: WindowSize<u32>, scale: u32) -> Self {
-        assert!(window.width > 0 && window.height > 0 && scale > 0);
-
-        let sim_size = window.to_game(scale);
-        let cell_count = (sim_size.width * sim_size.height) as usize;
-
-        let sim_buf = vec![
-            Cell {
-                material: Material::Dead,
-                updated: false,
-                to_material: Material::Alive,
-            };
-            cell_count
-        ];
-        let mut texture_buf = Vec::with_capacity(cell_count * 4);
-        for cell in &sim_buf {
-            let rgb = cell.material.get_rgb();
-            texture_buf.push(rgb.r);
-            texture_buf.push(rgb.g);
-            texture_buf.push(rgb.b);
-            texture_buf.push(255);
-        }
-        info!("Sim rgba buf len: {}", texture_buf.len());
-
-        let state = State {
-            frame: 0,
-            draw_shape: Shape::CircleFill,
-            draw_size: INIT_DRAW_SIZE,
-            running: false,
-            step_sim: false,
-            scale,
-            mouse: (0.0, 0.0).into(),
-        };
-        Self {
-            state,
-            prev_state: state,
-
-            window_size: window,
-            sim_size,
-            sim_buf,
-            texture_buf,
-        }
-    }
     // region: Utility
     // TODO(TOM): adjacent  using an index, not Pos<T>
 
@@ -285,9 +268,9 @@ impl CellSim {
     fn update_rgba(&mut self, pos: GamePos<u32>, material: Material) {
         let rgba = material.get_rgb();
         let index = self.get_index_texture(pos);
-        self.texture_buf[index + 0] = rgba.r;
-        self.texture_buf[index + 1] = rgba.g;
-        self.texture_buf[index + 2] = rgba.b;
+        self.buf[index + 0] = rgba.r;
+        self.buf[index + 1] = rgba.g;
+        self.buf[index + 2] = rgba.b;
     }
 
     const fn out_of_bounds(&self, pos: GamePos<u32>) -> bool {
@@ -334,29 +317,96 @@ impl CellSim {
                 }
             }
         }
+    }
 
-        for y in 1..self.sim_size.height - 1 {
-            for x in 1..self.sim_size.width - 1 {
-                let c = self.get_cell_mut((x, y).into());
-                if c.updated {
-                    let material = c.to_material;
-                    self.update_cell((x, y).into(), material);
+    fn render_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+        optick::event!("Rendering Mouse Outline");
+
+        self.state
+            .draw_shape
+            .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
+                let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
+                let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
+                let index = 4 * (y * self.sim_size.width + x) as usize;
+                self.buf[index + 0] = colour.r;
+                self.buf[index + 1] = colour.g;
+                self.buf[index + 2] = colour.b;
+                self.buf[index + 3] = colour.a;
+            });
+    }
+
+    fn clear_last_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+        optick::event!("Clearing Mouse Outline");
+
+        self.prev_state
+            .draw_shape
+            .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
+                let pos = mouse.add(f64::from(off_x), f64::from(off_y)).clamp(
+                    (0.0, 0.0).into(),
+                    self.sim_size.to_pos().map(|n| n as f64 - 1.0),
+                );
+                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
+
+                if self.buf[index + 0] == colour.r
+                    && self.buf[index + 1] == colour.g
+                    && self.buf[index + 2] == colour.b
+                    && self.buf[index + 3] == colour.a
+                {
+                    self.buf[index + 0] = BACKGROUND.r;
+                    self.buf[index + 1] = BACKGROUND.g;
+                    self.buf[index + 2] = BACKGROUND.b;
+                    self.buf[index + 3] = BACKGROUND.a;
+                } else {
+                    self.buf[index + 0] = self.buf[index + 0];
+                    self.buf[index + 1] = self.buf[index + 1];
+                    self.buf[index + 2] = self.buf[index + 2];
+                    self.buf[index + 3] = self.buf[index + 3];
                 }
-            }
+            });
+    }
+
+    // endregion
+    pub fn new(window: WindowSize<u32>, scale: u32) -> Self {
+        assert!(window.width > 0 && window.height > 0 && scale > 0);
+
+        let sim_size = window.to_game(scale);
+        let cell_count = (sim_size.width * sim_size.height) as usize;
+
+        let sim_buf = vec![
+            Cell {
+                material: Material::Dead,
+                updated: false,
+                to_material: Material::Alive,
+            };
+            cell_count
+        ];
+        let mut buf = Vec::with_capacity(cell_count * 4);
+        for cell in &sim_buf {
+            let rgb = cell.material.get_rgb();
+            buf.push(rgb.r);
+            buf.push(rgb.g);
+            buf.push(rgb.b);
+            buf.push(255);
+        }
+        info!("Sim rgba buf len: {}", buf.len());
+
+        let state = State {
+            frame: 0,
+            draw_shape: Shape::CircleFill,
+            draw_size: INIT_DRAW_SIZE,
+            running: false,
+            step_sim: false,
+            scale,
+            mouse: (0.0, 0.0).into(),
+        };
+        Self {
+            state,
+            prev_state: state,
+
+            window_size: window,
+            sim_size,
+            sim_buf,
+            buf,
         }
     }
-
-    fn render_mouse_outline(&mut self, mouse: WindowPos<f64>) {
-        let mouse = mouse.to_game(f64::from(self.state.scale));
-
-        Shape::CircleOutline.draw(self.state.draw_size, |off_x: i32, off_y: i32| {
-            let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
-            let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
-            let index = 4 * (y * self.sim_size.width + x) as usize;
-            self.texture_buf[index] = 255;
-            self.texture_buf[index + 1] = 255;
-            self.texture_buf[index + 2] = 255;
-        });
-    }
-    // endregion
 }

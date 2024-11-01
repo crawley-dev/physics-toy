@@ -1,3 +1,4 @@
+use educe::Educe;
 use log::{info, trace};
 use num::pow::Pow;
 use rand::random;
@@ -8,17 +9,33 @@ use crate::{
     app::InputData,
     frontend::{Frontend, SimData, SyncCell},
     utils::{
-        GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, BACKGROUND, INIT_DRAW_SIZE,
-        INIT_PARTICLES, MOUSE_OUTLINE, MULTIPLIER, RESISTANCE, TARGET_FPS, WHITE,
+        fmt_limited_precision, GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, BACKGROUND,
+        GRAV_CONST, GREEN, INIT_DRAW_SIZE, INIT_PARTICLES, MULTIPLIER, RESISTANCE, TARGET_FPS,
+        WHITE,
     },
 };
 
-#[derive(Debug, Clone, Copy)]
+/*
+    Particle Conversion in real world units:
+    - pos: pixels >> 1e4 km
+    - vel: pixels/frame >> 1e4 km/(1/TARGET_FPS) << 1000 times more than it should be (make grav const e-4 less)
+    - mass: 1e-10 kg << (make grav const less)
+    - radius: pixels >> 1e4 km
+
+    // TLDR: e-11 grav const for m, e-14 for km, e-18 for 1000km
+*/
+
+#[derive(Educe, Clone, Copy)]
+#[educe(Debug)]
 struct Particle {
+    #[educe(Debug(method(fmt_limited_precision)))]
     pos: GamePos<f64>,
-    vel: GamePos<f32>,
-    mass: f32,
-    radius: f32,
+    #[educe(Debug(method(fmt_limited_precision)))]
+    vel: GamePos<f64>,
+    #[educe(Debug(method(fmt_limited_precision)))]
+    mass: f64,
+    #[educe(Debug(method(fmt_limited_precision)))]
+    radius: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,7 +59,7 @@ pub struct GravitySim {
     camera: GamePos<f64>, // describes the top left of the viewport.
     bufs: [Vec<SyncCell<u8>>; 2],
     front_buffer: usize,
-    particles: Vec<Particle>,
+    particles: Vec<SyncCell<Particle>>,
 }
 
 impl Frontend for GravitySim {
@@ -51,7 +68,7 @@ impl Frontend for GravitySim {
         let buf = &self.bufs[self.front_buffer];
         let buf_slice = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) };
         SimData {
-            texture_buf: buf_slice,
+            buf: buf_slice,
             size: self.sim_size,
             frame: self.state.frame,
         }
@@ -89,19 +106,35 @@ impl Frontend for GravitySim {
     }
 
     fn draw(&mut self, mouse: WindowPos<f64>) {
-        // draw is already bounded by the window size, so no need to check bounds here.
         let game = mouse.to_game(f64::from(self.state.scale));
-        self.state
-            .draw_shape
-            .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
-                // TODO(TOM): calc area/draw calls, pre-alloc them
-                self.particles.push(Particle {
-                    pos: game.add(f64::from(off_x), f64::from(off_y)),
-                    vel: (1.0, 1.0).into(),
-                    mass: 1.0,
-                    radius: 1.0,
-                });
-            });
+        self.particles.push(SyncCell::new(Particle {
+            pos: game,
+            vel: (-0.3, 0.5).into(),
+            mass: 5.972e14,
+            radius: 6.371,
+        }));
+        // self.state
+        //     .draw_shape
+        //     .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
+        //         // TODO(TOM): calc area/draw calls, pre-alloc them
+        //         self.particles.push(SyncCell::new(Particle {
+        //             pos: game.add(f64::from(off_x), f64::from(off_y)),
+        //             vel: (1.0, 1.0).into(),
+        //             mass: 1.0,
+        //             radius: 1.0,
+        //         }));
+        //     });
+    }
+    // endregion
+    // region: Camera
+    fn change_camera_pos_x(&mut self, delta: f64) {
+        self.camera.x += delta / f64::from(self.state.scale);
+        info!("Camera: {:?}", self.camera);
+    }
+
+    fn change_camera_pos_y(&mut self, delta: f64) {
+        self.camera.y += delta / f64::from(self.state.scale);
+        info!("Camera: {:?}", self.camera);
     }
     // endregion
     // region: Sim Manipultion
@@ -110,7 +143,7 @@ impl Frontend for GravitySim {
 
         let new_sim_size = window.to_game(self.state.scale);
         if new_sim_size == self.sim_size {
-            info!("Sim size unchanged, skipping resize. {new_sim_size:?}");
+            trace!("Sim size unchanged, skipping resize. {new_sim_size:?}");
             return;
         }
 
@@ -147,25 +180,6 @@ impl Frontend for GravitySim {
 
         self.state.mouse = inputs.mouse;
 
-        // TODO(TOM): this doesn't work!!
-        if inputs.is_pressed(KeyCode::KeyW) {
-            self.camera.y -= 1.0;
-        } else if inputs.is_pressed(KeyCode::KeyS) {
-            self.camera.y += 1.0;
-        }
-        if inputs.is_pressed(KeyCode::KeyA) {
-            self.camera.x -= 1.0;
-        } else if inputs.is_pressed(KeyCode::KeyD) {
-            self.camera.x += 1.0;
-        }
-
-        let mut prev_mouse = self.prev_state.mouse.to_game(f64::from(self.state.scale));
-        prev_mouse.x -= self.camera.x; // Normalise cursor position to viewport
-        prev_mouse.y -= self.camera.y;
-        let mut mouse = self.state.mouse.to_game(f64::from(self.state.scale));
-        mouse.x -= self.camera.x; // Normalise cursor position to viewport
-        mouse.y -= self.camera.y;
-
         if self.state.running || self.state.step_sim {
             // TODO(TOM): delta updates, use 2 buffers!
             {
@@ -174,21 +188,27 @@ impl Frontend for GravitySim {
                     .iter_mut()
                     .for_each(|x| *x.get_mut() = 44);
             }
-            self.update_sim(mouse);
+            self.update_physics();
+            // info!("Particles: {:#?}", self.particles);
         }
 
         Self::render_particles(
             &self.bufs[self.front_buffer],
             &self.particles,
             self.sim_size,
+            // self.camera,
+            (0.0, 0.0).into(),
         );
 
         {
             optick::event!("Drawing Mouse Outline");
-            if prev_mouse != mouse {
-                self.clear_last_mouse_outline(prev_mouse, MOUSE_OUTLINE);
-                self.render_mouse_outline(mouse, MOUSE_OUTLINE);
-            }
+            self.clear_last_mouse_outline(
+                self.prev_state
+                    .mouse
+                    .to_game(f64::from(self.prev_state.scale)),
+                GREEN,
+            );
+            self.render_mouse_outline(self.state.mouse.to_game(f64::from(self.state.scale)), GREEN);
         }
 
         if self.state.frame % TARGET_FPS as u64 == 0 {
@@ -205,83 +225,149 @@ impl Frontend for GravitySim {
 }
 
 impl GravitySim {
-    fn update_sim(&mut self, mouse: GamePos<f64>) {
+    fn update_physics_cursor(&mut self, mouse: GamePos<f64>) {
         optick::event!("Physics Update");
 
         // All particles attract to mouse.
-        self.particles.par_iter_mut().for_each(|p| {
-            let dist = p.pos.sub(mouse.x, mouse.y);
-            let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
+        self.particles
+            .par_iter_mut()
+            .map(|p| p.get_mut())
+            .for_each(|p| {
+                let dist = p.pos.sub(mouse.x, mouse.y);
+                let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
 
-            // If collapsing in on cursor, give it some velocity.
-            if abs_dist > 5.0 {
-                let normal = p
-                    .pos
-                    .sub(mouse.x, mouse.y)
-                    .mul_uni(1.0 / abs_dist)
-                    .mul_uni(MULTIPLIER);
+                // If collapsing in on cursor, give it some velocity.
+                if abs_dist > 5.0 {
+                    let normal = p
+                        .pos
+                        .sub(mouse.x, mouse.y)
+                        .map(|n| n * (1.0 / abs_dist) * MULTIPLIER);
 
-                p.vel.x -= normal.x as f32;
-                p.vel.y -= normal.y as f32;
-            } else {
-                let mut tx = -1.0;
-                let mut ty = -1.0;
-                if p.vel.x < 0.0 {
-                    tx = 1.0;
+                    p.vel.x -= normal.x;
+                    p.vel.y -= normal.y;
+                } else {
+                    let mut tx = -1.0;
+                    let mut ty = -1.0;
+                    if p.vel.x < 0.0 {
+                        tx = 1.0;
+                    }
+                    if p.vel.y < 0.0 {
+                        ty = 1.0;
+                    }
+                    p.vel.x += tx;
+                    p.vel.y += ty;
                 }
-                if p.vel.y < 0.0 {
-                    ty = 1.0;
-                }
-                p.vel.x += tx;
-                p.vel.y += ty;
-            }
-            p.vel.x *= RESISTANCE as f32;
-            p.vel.y *= RESISTANCE as f32;
+                p.vel.x *= RESISTANCE;
+                p.vel.y *= RESISTANCE;
 
-            p.pos.x += f64::from(p.vel.x);
-            p.pos.y += f64::from(p.vel.y);
-        });
+                p.pos.x += f64::from(p.vel.x);
+                p.pos.y += f64::from(p.vel.y);
+            });
     }
 
+    fn update_physics(&mut self) {
+        // TODO(TOM): Delta time!
+
+        for (i, p1) in self.particles.iter().enumerate() {
+            let p1 = p1.get_mut();
+            if p1.mass == 0.0 {
+                continue;
+            }
+            for (j, p2) in self.particles.iter().enumerate() {
+                let p2 = p2.get_mut();
+                if i == j || p2.mass == 0.0 {
+                    continue;
+                }
+
+                // get distance between objects
+                let dist = p2.pos.sub(p1.pos.x, p1.pos.y);
+                let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
+
+                // get smaller radius
+                let max_radius = p1.radius.max(p2.radius);
+                if abs_dist < 0.95 * max_radius {
+                    // collide entities
+                    let consumer_pos = if p1.mass > p2.mass { p1.pos } else { p2.pos };
+                    let new_mass = p1.mass + p2.mass;
+                    let new_momentum: GamePos<f64> = (
+                        p1.vel.x * p1.mass + p2.vel.x * p2.mass,
+                        p1.vel.y * p1.mass + p2.vel.y * p2.mass,
+                    )
+                        .into();
+                    let new_radius = f64::sqrt(p1.radius.pow(2) + p2.radius.pow(2));
+
+                    *p1 = Particle {
+                        pos: consumer_pos,
+                        vel: new_momentum.map(|n| n / new_mass),
+                        mass: new_mass,
+                        radius: new_radius,
+                    };
+
+                    // will be culled.
+                    *p2 = Particle {
+                        pos: (f64::MIN, f64::MIN).into(),
+                        vel: (0.0, 0.0).into(),
+                        mass: 0.0,
+                        radius: 0.0,
+                    };
+                } else {
+                    // calc physics like normal
+                    let p1_unit_vector = dist.map(|n| n / abs_dist);
+
+                    let abs_force = GRAV_CONST * (p1.mass * p2.mass) as f64 / abs_dist.pow(2.0);
+
+                    let p1_force = p1_unit_vector.map(|n| n * abs_force);
+                    let p2_force = p1_force.map(|n| n * -1.0); // Equal and opposite!
+
+                    p1.vel.x += p1_force.x / p1.mass;
+                    p1.vel.y += p1_force.y / p1.mass;
+                    p1.pos.x += f64::from(p1.vel.x);
+                    p1.pos.y += f64::from(p1.vel.y);
+
+                    p2.vel.x += p2_force.x / p2.mass;
+                    p2.vel.y += p2_force.y / p2.mass;
+                    p2.pos.x += f64::from(p2.vel.x);
+                    p2.pos.y += f64::from(p2.vel.y);
+                }
+            }
+        }
+
+        self.particles
+            .retain(|p| p.get().mass != 0.0 && p.get().radius != 0.0);
+    }
+
+    // TODO(TOM): particles partly out of view, but not entirely (centre OOV)
     fn render_particles(
         texture_buf: &[SyncCell<u8>],
-        particles: &[Particle],
+        particles: &[SyncCell<Particle>],
         sim_size: GameSize<u32>,
+        camera: GamePos<f64>,
     ) {
         optick::event!("Update Texture Buffer");
         particles
             .par_iter()
+            .map(|p| p.get_mut())
             .filter(|p| {
-                p.pos.x >= 0.0
-                    && p.pos.x < f64::from(sim_size.width - 1)
-                    && p.pos.y >= 0.0
-                    && p.pos.y < f64::from(sim_size.height - 1)
+                p.pos.x >= camera.x
+                    && p.pos.x < f64::from(sim_size.width - 1) + camera.x
+                    && p.pos.y >= camera.y
+                    && p.pos.y < f64::from(sim_size.height - 1) + camera.y
             })
             .for_each(|p| {
-                let index = 4 * (p.pos.y as u32 * sim_size.width + p.pos.x as u32) as usize;
+                Shape::CircleOutline.draw(p.radius as u32, |off_x: i32, off_y: i32| {
+                    let off_pos = p.pos.add(f64::from(off_x), f64::from(off_y)).clamp(
+                        camera,
+                        sim_size.to_pos().map(|n| n as f64 - 1.0), // .add(camera.x, camera.y),
+                    );
 
-                *texture_buf[index + 0].get_mut() = WHITE.r;
-                *texture_buf[index + 1].get_mut() = WHITE.g;
-                *texture_buf[index + 2].get_mut() = WHITE.b;
-                *texture_buf[index + 3].get_mut() = WHITE.a;
+                    let index = 4 * (off_pos.y as u32 * sim_size.width + off_pos.x as u32) as usize;
+
+                    *texture_buf[index + 0].get_mut() = WHITE.r;
+                    *texture_buf[index + 1].get_mut() = WHITE.g;
+                    *texture_buf[index + 2].get_mut() = WHITE.b;
+                    *texture_buf[index + 3].get_mut() = WHITE.a;
+                });
             });
-
-        // TODO(TOM): this will work for cellular automata (ish), but not for particles
-        // particles
-        //     .par_iter()
-        //     .zip(texture_buf.par_chunks_exact_mut(4))
-        //     .filter(|(p, c)| {
-        //         p.pos.x >= 0.0
-        //             && p.pos.x < (sim_size.width - 1) as f64
-        //             && p.pos.y >= 0.0
-        //             && p.pos.y < (sim_size.height - 1) as f64
-        //     })
-        //     .for_each(|(p, c)| {
-        //         c[0] = WHITE.r;
-        //         c[1] = WHITE.g;
-        //         c[2] = WHITE.b;
-        //         c[3] = WHITE.a;
-        //     });
     }
 
     // TODO(TOM): make this a separate texture layer, overlayed on top of the sim
@@ -293,11 +379,10 @@ impl GravitySim {
             .draw_shape
             .draw(self.state.draw_size, |off_x, off_y| {
                 let pos = mouse.add(f64::from(off_x), f64::from(off_y)).clamp(
-                    0.0,
-                    0.0,
-                    f64::from(self.sim_size.width - 1),
-                    f64::from(self.sim_size.height - 1),
+                    (0.0, 0.0).into(),
+                    self.sim_size.to_pos().map(|n| n as f64 - 1.0),
                 );
+
                 let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
 
                 let buf = &mut self.bufs[self.front_buffer];
@@ -310,15 +395,16 @@ impl GravitySim {
 
     // TODO(TOM): this function proper doesn't work with back buffers
     fn clear_last_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+        optick::event!("Clearing Mouse Outline");
+
         self.prev_state
             .draw_shape
             .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
                 let pos = mouse.add(f64::from(off_x), f64::from(off_y)).clamp(
-                    0.0,
-                    0.0,
-                    f64::from(self.sim_size.width - 1),
-                    f64::from(self.sim_size.height - 1),
+                    (0.0, 0.0).into(),
+                    self.sim_size.to_pos().map(|n| n as f64 - 1.0),
                 );
+
                 let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
 
                 let buf = &mut self.bufs[self.front_buffer];
@@ -359,16 +445,24 @@ impl GravitySim {
             buf_clone.push(SyncCell::new(44));
         }
 
-        let mut particles = Vec::with_capacity(INIT_PARTICLES);
-        let rand = random::<u64>() % 10_000;
-        for _ in 0..INIT_PARTICLES {
-            particles.push(Particle {
-                pos: (random::<f64>() * rand as f64, random::<f64>() * rand as f64).into(),
-                vel: (0.0, 0.0).into(),
-                mass: 1.0,
-                radius: 1.0,
-            });
-        }
+        let mut particles = Vec::new();
+        particles.push(SyncCell::new(Particle {
+            pos: (120.0, 120.0).into(),
+            vel: (0.0, 0.0).into(),
+            mass: 1.989e20,
+            radius: 69.6340,
+        }));
+
+        // let rand = random::<u64>() % 10_000;
+        // let mut particles = Vec::with_capacity(INIT_PARTICLES);
+        // for _ in 0..INIT_PARTICLES {
+        //     particles.push(Particle {
+        //         pos: (random::<f64>() * rand as f64, random::<f64>() * rand as f64).into(),
+        //         vel: (0.0, 0.0).into(),
+        //         mass: 1.0,
+        //         radius: 1.0,
+        //     });
+        // }
 
         let state = State {
             frame: 0,

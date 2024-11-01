@@ -195,11 +195,7 @@ impl<'a> Backend<'a> {
 
         assert_eq!(tex_size.width, sim_data.size.width);
         assert_eq!(tex_size.height, sim_data.size.height);
-        assert_eq!(
-            sim_data.texture_buf.len(),
-            computed_data_len,
-            "{sim_data:#?}"
-        );
+        assert_eq!(sim_data.buf.len(), computed_data_len, "{sim_data:#?}");
 
         queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -208,7 +204,7 @@ impl<'a> Backend<'a> {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            sim_data.texture_buf,
+            sim_data.buf,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * sim_data.size.width),

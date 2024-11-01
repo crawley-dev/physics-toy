@@ -1,28 +1,33 @@
 // Is the colour trait implemented for each format
 // with each function hanging off the type or off the instance
 
+use core::fmt;
+use educe::Educe;
 use num::{Num, ToPrimitive};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 // Colours (cell_sim.rs / gravity_sim.rs)
+pub const GREEN: Rgba = Rgba::from_rgb(40, 255, 40);
 pub const WHITE: Rgba = Rgba::from_rgb(255, 255, 255);
 pub const BACKGROUND: Rgba = Rgba::from_rgb(44, 44, 44);
-pub const MOUSE_OUTLINE: Rgba = Rgba::from_rgb(40, 255, 40);
 
 // simulation constants (gravity_sim.rs)
 pub const MULTIPLIER: f64 = 2.0;
 pub const RESISTANCE: f64 = 0.99;
-pub const INIT_PARTICLES: usize = 1_000_000;
+pub const INIT_PARTICLES: usize = 0;
+pub const GRAV_CONST: f64 = 6.67430e-18; // reduced by 10 for better precision?
 
 // init (main.rs)
-pub const INIT_WIDTH: u32 = 800;
-pub const INIT_HEIGHT: u32 = 600;
-pub const INIT_SCALE: u32 = 4;
+pub const INIT_WIDTH: u32 = 1600;
+pub const INIT_HEIGHT: u32 = 1200;
+pub const INIT_SCALE: u32 = 3;
 pub const INIT_DRAW_SIZE: u32 = 8;
 pub const INIT_TITLE: &str = "Gravity Sim";
 pub const SIM_MAX_SCALE: u32 = 10;
+pub const CAMERA_SPEED: f64 = 2.0;
 
 // timing (app.rs)
+pub const MOUSE_COOLDOWN_MS: u64 = 250;
 pub const KEY_COOLDOWN_MS: u64 = 100;
 pub const TARGET_FPS: f64 = 60.0;
 pub const FRAME_TIME_MS: f64 = 1000.0 / TARGET_FPS;
@@ -30,19 +35,20 @@ pub const MS_BUFFER: f64 = 3.0;
 
 macro_rules! create_vec2 {
     ($name:ident, $param1:ident, $param2: ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub struct $name<T: Num + Copy> {
+        #[derive(Educe, Clone, Copy, PartialEq, Eq)]
+        #[educe(Debug(named_field = false))]
+        pub struct $name<T: Copy> {
             pub $param1: T,
             pub $param2: T,
         }
         impl<T: Num + Copy + ToPrimitive> $name<T> {
-            pub fn clamp(self, p1_min: T, p2_min: T, p1_max: T, p2_max: T) -> Self
+            pub fn clamp(self, min: $name<T>, max: $name<T>) -> Self
             where
                 T: PartialOrd,
             {
                 Self {
-                    $param1: num::clamp(self.$param1, p1_min, p1_max),
-                    $param2: num::clamp(self.$param2, p2_min, p2_max),
+                    $param1: num::clamp(self.$param1, min.$param1, max.$param1),
+                    $param2: num::clamp(self.$param2, min.$param2, max.$param2),
                 }
             }
 
@@ -50,6 +56,13 @@ macro_rules! create_vec2 {
                 $name {
                     $param1: self.$param1.into(),
                     $param2: self.$param2.into(),
+                }
+            }
+
+            pub fn map<T2: Num + Copy, F: Fn(T) -> T2>(self, f: F) -> $name<T2> {
+                $name {
+                    $param1: f(self.$param1),
+                    $param2: f(self.$param2),
                 }
             }
 
@@ -78,34 +91,6 @@ macro_rules! create_vec2 {
                 Self {
                     $param1: self.$param1 * p1.into(),
                     $param2: self.$param2 * p2.into(),
-                }
-            }
-
-            pub fn add_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
-                Self {
-                    $param1: self.$param1 + p.into(),
-                    $param2: self.$param2 + p.into(),
-                }
-            }
-
-            pub fn sub_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
-                Self {
-                    $param1: self.$param1 - p.into(),
-                    $param2: self.$param2 - p.into(),
-                }
-            }
-
-            pub fn div_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
-                Self {
-                    $param1: self.$param1 / p.into(),
-                    $param2: self.$param2 / p.into(),
-                }
-            }
-
-            pub fn mul_uni<T2: Num + Copy + Into<T>>(&self, p: T2) -> Self {
-                Self {
-                    $param1: self.$param1 * p.into(),
-                    $param2: self.$param2 * p.into(),
                 }
             }
         }
@@ -158,11 +143,18 @@ create_vec2!(WindowPos, x, y);
 create_vec2!(GameSize, width, height);
 create_vec2!(WindowSize, width, height);
 
+// region: Impl Vec2 Items
 impl<T: Num + Copy> GamePos<T> {
     pub fn to_window(self, scale: T) -> WindowPos<T> {
         WindowPos {
             x: self.x * scale,
             y: self.y * scale,
+        }
+    }
+    pub fn to_size(self) -> GameSize<T> {
+        GameSize {
+            width: self.x,
+            height: self.y,
         }
     }
 }
@@ -173,12 +165,25 @@ impl<T: Num + Copy> WindowPos<T> {
             y: self.y / scale,
         }
     }
+    pub fn to_size(self) -> WindowSize<T> {
+        WindowSize {
+            width: self.x,
+            height: self.y,
+        }
+    }
 }
 impl<T: Num + Copy> GameSize<T> {
     pub fn to_window(self, scale: T) -> WindowSize<T> {
         WindowSize {
             width: self.width * scale,
             height: self.height * scale,
+        }
+    }
+
+    pub fn to_pos(self) -> GamePos<T> {
+        GamePos {
+            x: self.width,
+            y: self.height,
         }
     }
 }
@@ -189,7 +194,15 @@ impl<T: Num + Copy> WindowSize<T> {
             height: self.height / scale,
         }
     }
+
+    pub fn to_pos(self) -> WindowPos<T> {
+        WindowPos {
+            x: self.width,
+            y: self.height,
+        }
+    }
 }
+// endregion
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -302,4 +315,8 @@ impl Rgba {
             a: (colour & 0xFF) as u8,
         }
     }
+}
+
+pub fn fmt_limited_precision<T: std::fmt::Debug>(x: T, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "{:.2?}", x) // Specify precision here
 }

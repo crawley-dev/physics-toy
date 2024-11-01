@@ -2,9 +2,11 @@ use crate::{
     backend::Backend,
     frontend::Frontend,
     utils::{
-        Shape, WindowPos, WindowSize, FRAME_TIME_MS, KEY_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
+        Shape, WindowPos, WindowSize, CAMERA_SPEED, FRAME_TIME_MS, KEY_COOLDOWN_MS,
+        MOUSE_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
     },
 };
+use educe::Educe;
 use log::{info, trace, warn};
 use std::{
     mem::transmute,
@@ -18,13 +20,21 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
+#[derive(Educe, Clone, Copy)]
+#[educe(Debug)]
 pub struct InputData {
     pub mouse: WindowPos<f64>,
+    pub mouse_cooldown: Instant,
+    pub mouse_held: bool,
+    pub mouse_pressed: bool,
+
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
+    #[educe(Debug(ignore))]
     pub keys_held: [bool; 256],
+    #[educe(Debug(ignore))]
     pub keys_pressed: [bool; 256],
+    #[educe(Debug(ignore))]
     pub tap_cooldowns: [Instant; 256],
-    pub mouse_down: bool,
 }
 
 impl InputData {
@@ -67,7 +77,9 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             backend,
             inputs: InputData {
                 mouse: WindowPos { x: 0.0, y: 0.0 },
-                mouse_down: false,
+                mouse_cooldown: Instant::now(),
+                mouse_held: false,
+                mouse_pressed: false,
                 keys_held: [false; 256],
                 keys_pressed: [false; 256],
                 tap_cooldowns: [Instant::now(); 256],
@@ -97,9 +109,20 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                         state,
                         button: MouseButton::Left,
                         ..
-                    } => {
-                        self.inputs.mouse_down = *state == ElementState::Pressed;
-                    }
+                    } => match *state {
+                        ElementState::Pressed => {
+                            if self.inputs.mouse_cooldown.elapsed()
+                                > Duration::from_millis(MOUSE_COOLDOWN_MS)
+                            {
+                                self.inputs.mouse_held = true;
+                                self.inputs.mouse_pressed = true;
+                                self.inputs.mouse_cooldown = Instant::now();
+                            }
+                        }
+                        ElementState::Released => {
+                            self.inputs.mouse_held = false;
+                        }
+                    },
                     WindowEvent::CursorMoved { position, .. } => {
                         self.inputs.mouse = WindowPos::from(*position);
                     }
@@ -126,6 +149,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             &mut self.backend,
                             &mut self.inputs,
                         );
+
                         self.frontend.update(&mut self.inputs);
 
                         let sim_data = self.frontend.get_sim_data();
@@ -182,7 +206,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         // TODO(TOM): the order of input handling will probably matter..
 
         // TODO(TOM): Interpolation, i.e bresenhams line algorithm
-        if inputs.mouse_down {
+        if inputs.mouse_pressed {
             frontend.draw(inputs.mouse);
         }
 
@@ -207,6 +231,18 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             backend.resize_texture(&frontend.get_sim_data());
         }
 
+        if inputs.is_pressed(KeyCode::KeyW) {
+            // swapped due to inverted y axis
+            frontend.change_camera_pos_y(CAMERA_SPEED);
+        } else if inputs.is_pressed(KeyCode::KeyS) {
+            frontend.change_camera_pos_y(-CAMERA_SPEED);
+        }
+        if inputs.is_pressed(KeyCode::KeyA) {
+            frontend.change_camera_pos_x(-CAMERA_SPEED);
+        } else if inputs.is_pressed(KeyCode::KeyD) {
+            frontend.change_camera_pos_x(CAMERA_SPEED);
+        }
+
         // Draw Size on ArrowUp and ArrowDown
         if inputs.is_pressed(KeyCode::ArrowUp) {
             frontend.change_draw_size(1);
@@ -225,6 +261,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         }
 
         // zero out inputs.keys_tapped each frame
+        inputs.mouse_pressed = false;
         inputs.keys_pressed = [false; 256];
     }
 
@@ -235,14 +272,9 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         let elapsed = frame_timer.elapsed();
         let remaining_frame_time = (FRAME_TIME_MS - elapsed.as_millis_f64()).max(0.0);
 
-        trace!(
-            "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
-            start.elapsed() / frame as u32
-        );
-
         // avg frametime
         if frame % 60 == 0 {
-            info!(
+            trace!(
                 "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
                 start.elapsed() / frame as u32
             );

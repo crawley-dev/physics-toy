@@ -7,6 +7,7 @@ use std::cell::UnsafeCell;
 
 // This is because buf accesses don't need to be thread safe, enables parallel rendering.
 // UnsafeCell doesn't have any sync gurantees, so we have to create a wrapper
+
 pub struct SyncCell<T>(UnsafeCell<T>);
 unsafe impl<T> Sync for SyncCell<T> where T: Send {}
 impl<T> SyncCell<T> {
@@ -23,11 +24,18 @@ impl<T> SyncCell<T> {
     }
 }
 
+impl<T: std::fmt::Debug> std::fmt::Debug for SyncCell<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let item = self.get();
+        f.debug_struct("SyncCell").field("Item", item).finish()
+    }
+}
+
 #[derive(Educe)]
 #[educe(Debug)]
 pub struct SimData<'a> {
     #[educe(Debug(ignore))]
-    pub texture_buf: &'a [u8],
+    pub buf: &'a [u8],
     pub size: GameSize<u32>,
     pub frame: u64,
 }
@@ -43,6 +51,9 @@ pub trait Frontend {
     fn change_draw_shape(&mut self, shape: Shape);
     fn change_draw_size(&mut self, delta: i32);
     fn draw(&mut self, pos: WindowPos<f64>);
+
+    fn change_camera_pos_x(&mut self, delta: f64);
+    fn change_camera_pos_y(&mut self, delta: f64);
 
     fn resize_sim(&mut self, window: WindowSize<u32>);
     fn rescale_sim(&mut self, scale: u32);
