@@ -104,16 +104,22 @@ impl Frontend for CellSim {
             .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
                 let off_pos = cell.add(off_x, off_y).clamp(
                     (0.0, 0.0).into(),
-                    self.sim_size.to_pos().map(|n| n as f64 - 1.0),
+                    self.sim_size.to_pos().map(|n| f64::from(n) - 1.0),
                 );
                 let cell = self.get_cell_mut(off_pos.map(|n| n as u32));
                 cell.to_material = Material::Alive;
                 cell.updated = true;
             });
     }
+
+    fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>) {
+        todo!("cell_sim::draw_released")
+    }
     // endregion
     // region: Camera
-    fn change_camera_vel(&mut self, delta: GamePos<f64>) {}
+    fn change_camera_vel(&mut self, delta: GamePos<f64>) {
+        todo!("cell_sim::change_camera_vel")
+    }
     // endregion
     // region: Sim Manipulation
     // TODO(TOM): resize from the centre of the screen, not the top left || from mouse with scroll wheel.
@@ -167,6 +173,10 @@ impl Frontend for CellSim {
         info!("New scale: {} | {:?}", scale, self.window_size);
         self.state.scale = scale;
         self.resize_sim(self.window_size);
+    }
+
+    fn reset_sim(&mut self) {
+        todo!("cell_sim::reset_sim")
     }
 
     fn clear_sim(&mut self) {
@@ -342,7 +352,7 @@ impl CellSim {
             .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
                 let pos = mouse.add(f64::from(off_x), f64::from(off_y)).clamp(
                     (0.0, 0.0).into(),
-                    self.sim_size.to_pos().map(|n| n as f64 - 1.0),
+                    self.sim_size.to_pos().map(|n| f64::from(n) - 1.0),
                 );
                 let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
 
@@ -356,10 +366,11 @@ impl CellSim {
                     self.buf[index + 2] = BACKGROUND.b;
                     self.buf[index + 3] = BACKGROUND.a;
                 } else {
-                    self.buf[index + 0] = self.buf[index + 0];
-                    self.buf[index + 1] = self.buf[index + 1];
-                    self.buf[index + 2] = self.buf[index + 2];
-                    self.buf[index + 3] = self.buf[index + 3];
+                    // do nothing, its all good!
+                    //self.buf[index + 0] = self.buf[index + 0];
+                    //self.buf[index + 1] = self.buf[index + 1];
+                    //self.buf[index + 2] = self.buf[index + 2];
+                    //self.buf[index + 3] = self.buf[index + 3];
                 }
             });
     }

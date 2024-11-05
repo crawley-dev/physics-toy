@@ -4,6 +4,7 @@
 use core::fmt;
 use educe::Educe;
 use num::{Num, ToPrimitive};
+use std::cell::UnsafeCell;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 // Colours (cell_sim.rs / gravity_sim.rs)
@@ -12,7 +13,8 @@ pub const WHITE: Rgba = Rgba::from_rgb(255, 255, 255);
 pub const BACKGROUND: Rgba = Rgba::from_rgb(44, 44, 44);
 
 // simulation constants (gravity_sim.rs)
-pub const MULTIPLIER: f64 = 2.0;
+pub const MOUSE_DRAWBACK_MULTIPLIER: f64 = 10.0;
+pub const PHYSICS_MULTIPLIER: f64 = 2.0;
 pub const RESISTANCE: f64 = 0.99;
 pub const INIT_PARTICLES: usize = 0;
 pub const GRAV_CONST: f64 = 6.67430e-18; // reduced by 10 for better precision?
@@ -27,6 +29,7 @@ pub const SIM_MAX_SCALE: u32 = 10;
 pub const CAMERA_SPEED: f64 = 0.1;
 
 // timing (app.rs)
+pub const MOUSE_PRESS_THRESHOLD_MS: u64 = 200;
 pub const MOUSE_COOLDOWN_MS: u64 = 250;
 pub const KEY_COOLDOWN_MS: u64 = 100;
 pub const TARGET_FPS: f64 = 60.0;
@@ -151,7 +154,7 @@ impl<T: Num + Copy> GamePos<T> {
             y: self.y * scale,
         }
     }
-    pub fn to_size(self) -> GameSize<T> {
+    pub const fn to_size(self) -> GameSize<T> {
         GameSize {
             width: self.x,
             height: self.y,
@@ -165,7 +168,7 @@ impl<T: Num + Copy> WindowPos<T> {
             y: self.y / scale,
         }
     }
-    pub fn to_size(self) -> WindowSize<T> {
+    pub const fn to_size(self) -> WindowSize<T> {
         WindowSize {
             width: self.x,
             height: self.y,
@@ -180,7 +183,7 @@ impl<T: Num + Copy> GameSize<T> {
         }
     }
 
-    pub fn to_pos(self) -> GamePos<T> {
+    pub const fn to_pos(self) -> GamePos<T> {
         GamePos {
             x: self.width,
             y: self.height,
@@ -195,7 +198,7 @@ impl<T: Num + Copy> WindowSize<T> {
         }
     }
 
-    pub fn to_pos(self) -> WindowPos<T> {
+    pub const fn to_pos(self) -> WindowPos<T> {
         WindowPos {
             x: self.width,
             y: self.height,
@@ -317,6 +320,37 @@ impl Rgba {
     }
 }
 
-pub fn fmt_limited_precision<T: std::fmt::Debug>(x: T, f: &mut fmt::Formatter) -> fmt::Result {
-    write!(f, "{:.2?}", x) // Specify precision here
+// This is because buf accesses don't need to be thread safe, enables parallel rendering.
+// UnsafeCell doesn't have any sync gurantees, so we have to create a wrapper
+pub struct SyncCell<T>(UnsafeCell<T>);
+unsafe impl<T> Sync for SyncCell<T> where T: Send {}
+impl<T> SyncCell<T> {
+    pub const fn new(val: T) -> Self {
+        Self(UnsafeCell::new(val))
+    }
+
+    pub fn get(&self) -> &T {
+        unsafe { &*self.0.get() }
+    }
+
+    pub fn get_mut(&self) -> &mut T {
+        unsafe { &mut *self.0.get() }
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for SyncCell<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let item = self.get();
+        f.debug_struct("SyncCell").field("Item", item).finish()
+    }
+}
+
+impl<T: Clone> Clone for SyncCell<T> {
+    fn clone(&self) -> Self {
+        Self::new(self.get().clone())
+    }
+}
+
+pub fn fmt_limited_precision<T: fmt::Debug>(x: T, format: &mut fmt::Formatter) -> fmt::Result {
+    write!(format, "{x:.2?}") // Specify precision here
 }

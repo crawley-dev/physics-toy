@@ -1,20 +1,22 @@
 #![feature(duration_millis_float)]
 #![warn(
+    /* UNNECESSARYILY ANNOYING  
+     * clippy::restriction, 
+     * clippy::cargo 
+     */
     // clippy::all,
-    // clippy::restriction,
-    // clippy::pedantic,
     // clippy::nursery,
-    // clippy::cargo
+    // clippy::pedantic,
 )]
 #![allow(
     unused,
-    // clippy::identity_op,
-    // clippy::mut_from_ref,
-    // clippy::single_call_fn
-    // clippy::cast_sign_loss,
-    // clippy::cast_precision_loss,
-    // clippy::cast_possible_wrap,
-    // clippy::cast_possible_truncation,
+    clippy::identity_op,
+    clippy::mut_from_ref,
+    clippy::single_call_fn,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation
 )]
 
 mod app;
@@ -40,6 +42,7 @@ fn main() {
 
     let app = App::new(event_loop, &window, frontend);
 
+    // NOTE(TOM): optick can be turned off by removing feature flag in cargo.toml
     // optick::start_capture();
     app.run();
     // optick::stop_capture("captures/toy-physics");

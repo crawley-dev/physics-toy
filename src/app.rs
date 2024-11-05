@@ -1,11 +1,4 @@
-use crate::{
-    backend::Backend,
-    frontend::Frontend,
-    utils::{
-        GamePos, Shape, WindowPos, WindowSize, CAMERA_SPEED, FRAME_TIME_MS, KEY_COOLDOWN_MS,
-        MOUSE_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
-    },
-};
+use crate::{backend::Backend, frontend::Frontend, utils::*};
 use educe::Educe;
 use log::{info, trace, warn};
 use std::{
@@ -13,8 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 use winit::{
-    event::{ElementState, KeyEvent, MouseButton},
-    event::{Event, WindowEvent},
+    event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
     event_loop::{EventLoop, EventLoopWindowTarget},
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowBuilder},
@@ -22,11 +14,19 @@ use winit::{
 
 #[derive(Educe, Clone, Copy)]
 #[educe(Debug)]
+struct MouseInput {
+    pub state: bool,
+    pub pos: WindowPos<f64>,
+    pub time: Instant,
+}
+
+#[derive(Educe, Clone, Copy)]
+#[educe(Debug)]
 pub struct InputData {
     pub mouse: WindowPos<f64>,
     pub mouse_cooldown: Instant,
-    pub mouse_held: bool,
-    pub mouse_pressed: bool,
+    mouse_pressed: MouseInput,
+    mouse_released: MouseInput,
 
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
     #[educe(Debug(ignore))]
@@ -43,6 +43,26 @@ impl InputData {
     }
     pub const fn is_held(&self, key: KeyCode) -> bool {
         self.keys_held[key as usize]
+    }
+
+    pub fn is_mouse_held(&self) -> bool {
+        self.mouse_pressed.state
+            && self.mouse_pressed.time
+                > self
+                    .mouse_released
+                    .time
+                    .checked_add(Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS))
+                    .unwrap()
+    }
+
+    pub fn was_mouse_held(&self) -> bool {
+        self.mouse_released.state
+            && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+    }
+
+    pub fn was_mouse_pressed(&self) -> bool {
+        self.mouse_released.state
+            && self.mouse_pressed.time.elapsed() < Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
     }
 }
 
@@ -79,10 +99,18 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             frontend,
             backend,
             inputs: InputData {
-                mouse: WindowPos { x: 0.0, y: 0.0 },
+                mouse: (0.0, 0.0).into(),
                 mouse_cooldown: Instant::now(),
-                mouse_held: false,
-                mouse_pressed: false,
+                mouse_pressed: MouseInput {
+                    state: false,
+                    pos: (0.0, 0.0).into(),
+                    time: Instant::now(),
+                },
+                mouse_released: MouseInput {
+                    state: false,
+                    pos: (0.0, 0.0).into(),
+                    time: Instant::now(),
+                },
                 keys_held: [false; 256],
                 keys_pressed: [false; 256],
                 tap_cooldowns: [Instant::now(); 256],
@@ -90,7 +118,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         }
     }
 
-    // TODO(TOM): use matches! macro more , its INCREDIBLE
+    // NOTE(TOM): use matches! macro more , its INCREDIBLE
 
     pub fn run(mut self) {
         let start = Instant::now();
@@ -117,14 +145,24 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             if self.inputs.mouse_cooldown.elapsed()
                                 > Duration::from_millis(MOUSE_COOLDOWN_MS)
                             {
-                                self.inputs.mouse_held = true;
-                                self.inputs.mouse_pressed = true;
+                                // TODO(TOM): can only confirm that it was a mouse_press
+                                // and not a mouse_held, after n frames and it is released.
+                                self.inputs.mouse_pressed = MouseInput {
+                                    state: true,
+                                    pos: self.inputs.mouse,
+                                    time: Instant::now(),
+                                };
+                                self.inputs.mouse_released.state = false;
                                 self.inputs.mouse_cooldown = Instant::now();
                             }
                         }
                         ElementState::Released => {
-                            // NOTE: a match for element state blocks mouse_held, for some reason??
-                            self.inputs.mouse_held = false;
+                            self.inputs.mouse_released = MouseInput {
+                                state: true,
+                                pos: self.inputs.mouse,
+                                time: Instant::now(),
+                            };
+                            self.inputs.mouse_pressed.state = false;
                         }
                     },
                     WindowEvent::CursorMoved { position, .. } => {
@@ -209,11 +247,18 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
 
         // TODO(TOM): the order of input handling will probably matter..
 
-        // TODO(TOM): Interpolation, i.e bresenhams line algorithm
-        if inputs.mouse_pressed {
-            frontend.draw(inputs.mouse);
+        assert!(
+            (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
+            "Mouse state error {inputs:#?}"
+        );
+        if inputs.was_mouse_held() {
+            frontend.draw_released(inputs.mouse_pressed.pos, inputs.mouse_released.pos);
+        } else if inputs.is_mouse_held() {
+            // TODO(TOM): draw indicator arrow for direction of particle.
+        } else if inputs.was_mouse_pressed() {
+            // TODO(TOM): Interpolation, i.e bresenhams line algorithm
+            //     frontend.draw(inputs.mouse);
         }
-
         // Toggle simulation on KeySpace
         if inputs.is_pressed(KeyCode::Space) {
             frontend.toggle_sim();
@@ -224,6 +269,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         // Clear Sim on KeyC
         if inputs.is_pressed(KeyCode::KeyC) {
             frontend.clear_sim();
+        } else if inputs.is_pressed(KeyCode::KeyR) {
+            frontend.reset_sim();
         }
 
         // Scale factor on KeyPlus and KeyMinus
@@ -270,7 +317,8 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         }
 
         // zero out "pressed" each frame
-        inputs.mouse_pressed = false;
+        inputs.mouse_pressed.state = false;
+        inputs.mouse_released.state = false;
         inputs.keys_pressed = [false; 256];
     }
 

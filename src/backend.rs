@@ -1,11 +1,8 @@
-use std::time::Instant;
-
-use crate::frontend::SimData;
-use crate::utils::GameSize;
+use crate::{frontend::SimData, utils::GameSize};
 use log::{error, info, trace};
+use std::time::Instant;
 use wgpu::{CompositeAlphaMode, DeviceDescriptor};
-use winit::dpi::PhysicalSize;
-use winit::window::Window;
+use winit::{dpi::PhysicalSize, window::Window};
 
 pub struct Backend<'a> {
     // The window must be declared after the surface so

@@ -3,33 +3,6 @@ use crate::{
     utils::{GamePos, GameSize, Shape, WindowPos, WindowSize},
 };
 use educe::Educe;
-use std::cell::UnsafeCell;
-
-// This is because buf accesses don't need to be thread safe, enables parallel rendering.
-// UnsafeCell doesn't have any sync gurantees, so we have to create a wrapper
-
-pub struct SyncCell<T>(UnsafeCell<T>);
-unsafe impl<T> Sync for SyncCell<T> where T: Send {}
-impl<T> SyncCell<T> {
-    pub const fn new(val: T) -> Self {
-        Self(UnsafeCell::new(val))
-    }
-
-    pub fn get(&self) -> &T {
-        unsafe { &*self.0.get() }
-    }
-
-    pub fn get_mut(&self) -> &mut T {
-        unsafe { &mut *self.0.get() }
-    }
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for SyncCell<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let item = self.get();
-        f.debug_struct("SyncCell").field("Item", item).finish()
-    }
-}
 
 #[derive(Educe)]
 #[educe(Debug)]
@@ -51,11 +24,13 @@ pub trait Frontend {
     fn change_draw_shape(&mut self, shape: Shape);
     fn change_draw_size(&mut self, delta: i32);
     fn draw(&mut self, pos: WindowPos<f64>);
+    fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>);
 
     fn change_camera_vel(&mut self, delta: GamePos<f64>);
 
     fn resize_sim(&mut self, window: WindowSize<u32>);
     fn rescale_sim(&mut self, scale: u32);
+    fn reset_sim(&mut self);
     fn clear_sim(&mut self);
     fn update(&mut self, inputs: &mut InputData);
 }
