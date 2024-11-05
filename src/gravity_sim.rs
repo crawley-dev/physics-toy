@@ -299,7 +299,6 @@ impl GravitySim {
         //     return;
         // }
 
-        // TODO(TOM): Delta time! | Objects move faster with more objects in game.
         for (i, p1) in self.particles.iter().enumerate() {
             let p1 = p1.get_mut();
             if p1.mass == 0.0 {
@@ -351,15 +350,9 @@ impl GravitySim {
 
                     p1.vel.x += p1_force.x / p1.mass;
                     p1.vel.y += p1_force.y / p1.mass;
-                    // p1.vel = p1.vel.map(|n| n * RESISTANCE);
-                    // p1.pos.x += f64::from(p1.vel.x);
-                    // p1.pos.y += f64::from(p1.vel.y);
 
                     p2.vel.x += p2_force.x / p2.mass;
                     p2.vel.y += p2_force.y / p2.mass;
-                    // p2.vel = p2.vel.map(|n| n * RESISTANCE);
-                    // p2.pos.x += f64::from(p2.vel.x);
-                    // p2.pos.y += f64::from(p2.vel.y);
                 }
             }
             p1.vel = p1.vel.map(|n| n * RESISTANCE);
@@ -371,7 +364,6 @@ impl GravitySim {
             .retain(|p| p.get().mass != 0.0 && p.get().radius != 0.0);
     }
 
-    // TODO(TOM): particles partly out of view, but not entirely (centre OOV)
     fn render_particles(
         texture_buf: &[SyncCell<u8>],
         particles: &[SyncCell<Particle>],
