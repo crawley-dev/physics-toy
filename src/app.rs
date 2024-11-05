@@ -14,7 +14,7 @@ use winit::{
 
 #[derive(Educe, Clone, Copy)]
 #[educe(Debug)]
-struct MouseInput {
+pub struct MouseInput {
     pub state: bool,
     pub pos: WindowPos<f64>,
     pub time: Instant,
@@ -25,8 +25,8 @@ struct MouseInput {
 pub struct InputData {
     pub mouse: WindowPos<f64>,
     pub mouse_cooldown: Instant,
-    mouse_pressed: MouseInput,
-    mouse_released: MouseInput,
+    pub mouse_pressed: MouseInput,
+    pub mouse_released: MouseInput,
 
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
     #[educe(Debug(ignore))]
@@ -191,8 +191,9 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             &mut self.backend,
                             &mut self.inputs,
                         );
-
+                        self.frontend.handle_inputs(&mut self.inputs);
                         self.frontend.update(&mut self.inputs);
+                        Self::clear_inputs(&mut self.inputs);
 
                         let sim_data = self.frontend.get_sim_data();
                         self.backend.render(&sim_data, start);
@@ -241,37 +242,9 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
         }
     }
 
-    // A centralised input handling function, calling upon backend and frontend calls.
+    // Unified input handling for tasks that involve both frontend and backend (e.g resize)
     fn handle_inputs(frontend: &mut F, backend: &mut Backend<'_>, inputs: &mut InputData) {
-        optick::event!();
-
-        // TODO(TOM): the order of input handling will probably matter..
-
-        assert!(
-            (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
-            "Mouse state error {inputs:#?}"
-        );
-        if inputs.was_mouse_held() {
-            frontend.draw_released(inputs.mouse_pressed.pos, inputs.mouse_released.pos);
-        } else if inputs.is_mouse_held() {
-            // TODO(TOM): draw indicator arrow for direction of particle.
-        } else if inputs.was_mouse_pressed() {
-            // TODO(TOM): Interpolation, i.e bresenhams line algorithm
-            //     frontend.draw(inputs.mouse);
-        }
-        // Toggle simulation on KeySpace
-        if inputs.is_pressed(KeyCode::Space) {
-            frontend.toggle_sim();
-        } else if inputs.is_pressed(KeyCode::ArrowRight) && !frontend.is_sim_running() {
-            frontend.step_sim();
-        }
-
-        // Clear Sim on KeyC
-        if inputs.is_pressed(KeyCode::KeyC) {
-            frontend.clear_sim();
-        } else if inputs.is_pressed(KeyCode::KeyR) {
-            frontend.reset_sim();
-        }
+        optick::event!("App::handle_inputs");
 
         // Scale factor on KeyPlus and KeyMinus
         if inputs.is_pressed(KeyCode::Minus) && frontend.get_scale() > 1 {
@@ -281,41 +254,9 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
             frontend.rescale_sim(frontend.get_scale() + 1);
             backend.resize_texture(&frontend.get_sim_data());
         }
+    }
 
-        let mut camera_accel: GamePos<f64> = (0.0, 0.0).into();
-        if inputs.is_held(KeyCode::KeyW) {
-            camera_accel.y -= CAMERA_SPEED;
-        }
-        if inputs.is_held(KeyCode::KeyS) {
-            camera_accel.y += CAMERA_SPEED;
-        }
-        if inputs.is_held(KeyCode::KeyA) {
-            camera_accel.x -= CAMERA_SPEED;
-        }
-        if inputs.is_held(KeyCode::KeyD) {
-            camera_accel.x += CAMERA_SPEED;
-        }
-        if camera_accel != (0.0, 0.0).into() {
-            frontend.change_camera_vel(camera_accel);
-        }
-
-        // Draw Size on ArrowUp and ArrowDown
-        if inputs.is_pressed(KeyCode::ArrowUp) {
-            frontend.change_draw_size(1);
-        } else if inputs.is_pressed(KeyCode::ArrowDown) {
-            frontend.change_draw_size(-1);
-        }
-
-        // Cycle shape on Tab
-        if inputs.is_pressed(KeyCode::Tab) {
-            unsafe {
-                let shape = transmute::<u8, Shape>(
-                    (frontend.get_draw_shape() as u8 + 1) % Shape::Count as u8,
-                );
-                frontend.change_draw_shape(shape);
-            }
-        }
-
+    fn clear_inputs(inputs: &mut InputData) {
         // zero out "pressed" each frame
         inputs.mouse_pressed.state = false;
         inputs.mouse_released.state = false;

@@ -1,12 +1,12 @@
+use std::mem::transmute;
+
 use crate::{
     app::InputData,
     frontend::{Frontend, SimData},
-    utils::{
-        GamePos, GameSize, Rgba, Shape, WindowPos, WindowSize, BACKGROUND, GREEN, INIT_DRAW_SIZE,
-        WHITE,
-    },
+    utils::*,
 };
 use log::{info, trace};
+use winit::keyboard::KeyCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Material {
@@ -67,35 +67,7 @@ impl Frontend for CellSim {
         self.state.scale
     }
 
-    fn get_draw_shape(&self) -> Shape {
-        self.state.draw_shape
-    }
-
-    fn toggle_sim(&mut self) {
-        self.state.running = !self.state.running;
-        info!("Sim: {}", self.state.running);
-    }
-
-    fn step_sim(&mut self) {
-        self.state.step_sim = true;
-        trace!("step sim");
-    }
-
-    fn is_sim_running(&self) -> bool {
-        self.state.running
-    }
-    // endregion
-    // region: Drawing
-    fn change_draw_shape(&mut self, shape: Shape) {
-        info!("{:?} => {:?}", self.state.draw_shape, shape);
-        self.state.draw_shape = shape;
-    }
-
-    fn change_draw_size(&mut self, delta: i32) {
-        self.state.draw_size = (self.state.draw_size as i32 + delta).max(1) as u32;
-    }
-
-    fn draw(&mut self, pos: WindowPos<f64>) {
+    fn draw_pressed(&mut self, pos: WindowPos<f64>) {
         // draw is already bounded by the window size, so no need to check bounds here.
         let cell = pos.to_game(f64::from(self.state.scale));
 
@@ -112,13 +84,12 @@ impl Frontend for CellSim {
             });
     }
 
-    fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>) {
-        todo!("cell_sim::draw_released")
+    fn draw_held(&mut self, pos: WindowPos<f64>) {
+        self.draw_pressed(pos);
     }
-    // endregion
-    // region: Camera
-    fn change_camera_vel(&mut self, delta: GamePos<f64>) {
-        todo!("cell_sim::change_camera_vel")
+
+    fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>) {
+        trace!("not used.");
     }
     // endregion
     // region: Sim Manipulation
@@ -188,9 +159,59 @@ impl Frontend for CellSim {
     }
     // endregion
     // region: update
-    fn update(&mut self, inputs: &mut InputData) {
+    fn handle_inputs(&mut self, inputs: &mut InputData) {
         self.state.mouse = inputs.mouse;
 
+        assert!(
+            (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
+            "Mouse state error {inputs:#?}"
+        );
+        if inputs.is_mouse_held() {
+            // TODO(TOM): draw indicator arrow for direction of particle.
+            self.draw_held(inputs.mouse);
+        } else if inputs.was_mouse_pressed() {
+            // TODO(TOM): Interpolation, i.e bresenhams line algorithm
+            self.draw_pressed(inputs.mouse);
+        }
+
+        // Toggle simulation on KeySpace
+        if inputs.is_pressed(KeyCode::Space) {
+            self.state.running = !self.state.running;
+            info!("Sim running: {}", self.state.running);
+        }
+        self.state.step_sim = inputs.is_pressed(KeyCode::ArrowRight) && !self.state.running;
+
+        // Clear Sim on KeyC
+        if inputs.is_pressed(KeyCode::KeyC) {
+            self.clear_sim();
+        } else if inputs.is_pressed(KeyCode::KeyR) {
+            self.reset_sim();
+        }
+
+        // Branchless Draw Size Change
+        self.state.draw_size += inputs.is_pressed(KeyCode::ArrowUp) as u32;
+        self.state.draw_size -= inputs.is_pressed(KeyCode::ArrowDown) as u32;
+        self.state.draw_size = self.state.draw_size.clamp(1, MAX_DRAW_SIZE);
+
+        // Cycle shape on Tab
+        if inputs.is_pressed(KeyCode::Tab) {
+            unsafe {
+                let shape =
+                    transmute::<u8, Shape>((self.state.draw_shape as u8 + 1) % Shape::Count as u8);
+                match shape {
+                    // Shapes that are acceptable
+                    Shape::CircleOutline | Shape::CircleFill | Shape::SquareCentered => {
+                        self.state.draw_shape = shape;
+                    }
+                    _ => {
+                        self.state.draw_shape = Shape::CircleOutline;
+                    }
+                }
+            }
+        }
+    }
+
+    fn update(&mut self, inputs: &mut InputData) {
         if self.state.running || self.state.step_sim {
             self.update_gol();
         }

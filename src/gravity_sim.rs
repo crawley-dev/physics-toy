@@ -1,3 +1,5 @@
+use std::mem::transmute;
+
 use crate::{
     app::InputData,
     frontend::{Frontend, SimData},
@@ -7,6 +9,7 @@ use educe::Educe;
 use log::{info, trace};
 use num::pow::Pow;
 use rayon::prelude::*;
+use winit::keyboard::KeyCode;
 
 /*
     Particle Conversion in real world units:
@@ -71,54 +74,37 @@ impl Frontend for GravitySim {
     fn get_scale(&self) -> u32 {
         self.state.scale
     }
-
-    fn get_draw_shape(&self) -> Shape {
-        self.state.draw_shape
-    }
-
-    fn toggle_sim(&mut self) {
-        self.state.running = !self.state.running;
-        info!("Sim running: {}", self.state.running);
-    }
-
-    fn step_sim(&mut self) {
-        self.state.step_sim = true;
-    }
-
-    fn is_sim_running(&self) -> bool {
-        self.state.running
-    }
     // endregion
     // region: Drawing
-    fn change_draw_shape(&mut self, shape: Shape) {
-        self.state.draw_shape = shape;
-    }
-
-    fn change_draw_size(&mut self, delta: i32) {
-        self.state.draw_size = (self.state.draw_size as i32 + delta).max(1) as u32;
-    }
-
-    fn draw(&mut self, mouse: WindowPos<f64>) {
-        let world = mouse
+    fn draw_pressed(&mut self, pos: WindowPos<f64>) {
+        let world = pos
             .to_game(f64::from(self.state.scale))
             .add(self.camera.x, self.camera.y);
+
         self.particles.push(SyncCell::new(Particle {
             pos: world,
             vel: (-0.3, 0.5).into(),
-            mass: 5.972e4, // 14
+            mass: 5.972e14, // 14
             radius: 6.371,
         }));
     }
 
+    // draws arrow for draw_released.
+    fn draw_held(&mut self, pos: WindowPos<f64>) {
+        let world_pos = pos
+            .to_game(f64::from(self.state.scale))
+            .add(self.camera.x, self.camera.y);
+    }
+
     fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>) {
+        let world_pos = pressed
+            .to_game(f64::from(self.state.scale))
+            .add(self.camera.x, self.camera.y);
+
         // using pressed, creates a drawback effect, like angry birds!
         let game_delta = pressed
             .sub(released.x, released.y)
             .to_game(f64::from(self.state.scale));
-
-        let world_pos = pressed
-            .to_game(f64::from(self.state.scale))
-            .add(self.camera.x, self.camera.y);
 
         let velocity = game_delta
             .div(self.sim_size.width, self.sim_size.height)
@@ -127,16 +113,9 @@ impl Frontend for GravitySim {
         self.particles.push(SyncCell::new(Particle {
             pos: world_pos,
             vel: velocity,
-            mass: 5.972e4, // 14
+            mass: 5.972e14, // 14
             radius: 6.371,
         }));
-    }
-
-    // endregion
-    // region: Camera
-    fn change_camera_vel(&mut self, delta: GamePos<f64>) {
-        trace!("Camera vel: {:.2?} + {:.2?}", self.camera_vel, delta);
-        self.camera_vel = self.camera_vel.add(delta.x, delta.y);
     }
     // endregion
     // region: Sim Manipultion
@@ -182,12 +161,72 @@ impl Frontend for GravitySim {
     }
     // endregion
     // region: Update
+    fn handle_inputs(&mut self, inputs: &mut InputData) {
+        self.camera = self.camera.add(self.camera_vel.x, self.camera_vel.y);
+        self.camera_vel = self.camera_vel.map(|n| n * CAMERA_RESISTANCE); // expand velocity til equilibrium, use easing fn?
+        self.state.mouse = inputs.mouse;
+
+        assert!(
+            (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
+            "Mouse state error {inputs:#?}"
+        );
+        if inputs.was_mouse_held() {
+            self.draw_released(inputs.mouse_pressed.pos, inputs.mouse_released.pos);
+        } else if inputs.is_mouse_held() {
+            // TODO(TOM): draw indicator arrow for direction of particle.
+            self.draw_held(inputs.mouse);
+        } else if inputs.was_mouse_pressed() {
+            // TODO(TOM): Interpolation, i.e bresenhams line algorithm
+            self.draw_pressed(inputs.mouse);
+        }
+
+        // Toggle simulation on KeySpace
+        if inputs.is_pressed(KeyCode::Space) {
+            self.state.running = !self.state.running;
+            info!("Sim running: {}", self.state.running);
+        }
+        self.state.step_sim = inputs.is_pressed(KeyCode::ArrowRight) && !self.state.running;
+
+        // Clear Sim on KeyC
+        if inputs.is_pressed(KeyCode::KeyC) {
+            self.clear_sim();
+        } else if inputs.is_pressed(KeyCode::KeyR) {
+            self.reset_sim();
+        }
+
+        // Branchless Camera Movement
+        self.camera_vel.y -= CAMERA_SPEED * inputs.is_held(KeyCode::KeyW) as i32 as f64;
+        self.camera_vel.y += CAMERA_SPEED * inputs.is_held(KeyCode::KeyS) as i32 as f64;
+        self.camera_vel.x += CAMERA_SPEED * inputs.is_held(KeyCode::KeyD) as i32 as f64;
+        self.camera_vel.x -= CAMERA_SPEED * inputs.is_held(KeyCode::KeyA) as i32 as f64;
+
+        // Branchless Draw Size Change
+        self.state.draw_size += inputs.is_pressed(KeyCode::ArrowUp) as u32;
+        self.state.draw_size -= inputs.is_pressed(KeyCode::ArrowDown) as u32;
+        self.state.draw_size = self.state.draw_size.clamp(1, MAX_DRAW_SIZE);
+
+        // Cycle shape on Tab
+        if inputs.is_pressed(KeyCode::Tab) {
+            unsafe {
+                let shape =
+                    transmute::<u8, Shape>((self.state.draw_shape as u8 + 1) % Shape::Count as u8);
+                match shape {
+                    // Shapes that are acceptable
+                    Shape::CircleOutline | Shape::CircleFill | Shape::SquareCentered => {
+                        self.state.draw_shape = shape;
+                    }
+                    _ => {
+                        self.state.draw_shape = Shape::CircleOutline;
+                    }
+                }
+            }
+        }
+    }
+
     fn update(&mut self, inputs: &mut InputData) {
         optick::event!("GravitySim::update");
 
-        self.state.mouse = inputs.mouse;
-        self.camera = self.camera.add(self.camera_vel.x, self.camera_vel.y);
-        self.camera_vel = self.camera_vel.map(|n| n * 0.97); // expand velocity til equilibrium, use easing fn?
+        self.handle_inputs(inputs);
 
         {
             optick::event!("Resetting texture");
@@ -195,10 +234,12 @@ impl Frontend for GravitySim {
                 .iter_mut()
                 .for_each(|x| *x.get_mut() = 44);
         }
+
         if self.state.running || self.state.step_sim {
             // TODO(TOM): delta updates, use 2 buffers!
             self.update_physics();
         }
+
         Self::render_particles(
             &self.bufs[self.front_buffer],
             &self.particles,
@@ -280,8 +321,8 @@ impl GravitySim {
                     p.vel.x += tx;
                     p.vel.y += ty;
                 }
-                p.vel.x *= RESISTANCE;
-                p.vel.y *= RESISTANCE;
+                p.vel.x *= PHYSICS_RESISTANCE;
+                p.vel.y *= PHYSICS_RESISTANCE;
 
                 p.pos.x += p.vel.x;
                 p.pos.y += p.vel.y;
@@ -290,14 +331,6 @@ impl GravitySim {
 
     fn update_physics(&mut self) {
         optick::event!("Physics Update");
-
-        // if self.particles.len() == 1 {
-        //     let p = self.particles[0].get_mut();
-        //     p.vel = p.vel.map(|x| x * RESISTANCE);
-        //     p.pos.x += f64::from(p.vel.x);
-        //     p.pos.y += f64::from(p.vel.y);
-        //     return;
-        // }
 
         for (i, p1) in self.particles.iter().enumerate() {
             let p1 = p1.get_mut();
@@ -309,6 +342,7 @@ impl GravitySim {
                 if i == j || p2.mass == 0.0 {
                     continue;
                 }
+
                 // get distance between objects
                 let dist = p2.pos.sub(p1.pos.x, p1.pos.y);
                 let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
@@ -355,7 +389,7 @@ impl GravitySim {
                     p2.vel.y += p2_force.y / p2.mass;
                 }
             }
-            p1.vel = p1.vel.map(|n| n * RESISTANCE);
+            p1.vel = p1.vel.map(|n| n * PHYSICS_RESISTANCE);
             p1.pos.x += p1.vel.x;
             p1.pos.y += p1.vel.y;
         }
@@ -371,9 +405,10 @@ impl GravitySim {
         camera: GamePos<f64>,
     ) {
         optick::event!("Update Texture Buffer");
+
         particles
             .iter()
-            .map(SyncCell::get_mut)
+            .map(|p| p.get_mut())
             .map(|p| (p.pos.sub(camera.x, camera.y), p.radius))
             .filter(|(pos, radius)| {
                 !(pos.x + radius < 0.0

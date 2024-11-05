@@ -12,21 +12,23 @@ pub const GREEN: Rgba = Rgba::from_rgb(40, 255, 40);
 pub const WHITE: Rgba = Rgba::from_rgb(255, 255, 255);
 pub const BACKGROUND: Rgba = Rgba::from_rgb(44, 44, 44);
 
-// simulation constants (gravity_sim.rs)
-pub const MOUSE_DRAWBACK_MULTIPLIER: f64 = 10.0;
+// gravity_sim.rs
+pub const MOUSE_DRAWBACK_MULTIPLIER: f64 = 20.0;
 pub const PHYSICS_MULTIPLIER: f64 = 2.0;
-pub const RESISTANCE: f64 = 0.99;
+pub const PHYSICS_RESISTANCE: f64 = 0.999;
 pub const INIT_PARTICLES: usize = 0;
 pub const GRAV_CONST: f64 = 6.67430e-18; // reduced by 10 for better precision?
+pub const CAMERA_RESISTANCE: f64 = 0.97;
+pub const CAMERA_SPEED: f64 = 0.1;
 
-// init (main.rs)
+// Generic Parameters (*)
+pub const INIT_TITLE: &str = "Gravity Sim";
 pub const INIT_WIDTH: u32 = 1600;
 pub const INIT_HEIGHT: u32 = 1200;
 pub const INIT_SCALE: u32 = 3;
 pub const INIT_DRAW_SIZE: u32 = 8;
-pub const INIT_TITLE: &str = "Gravity Sim";
 pub const SIM_MAX_SCALE: u32 = 10;
-pub const CAMERA_SPEED: f64 = 0.1;
+pub const MAX_DRAW_SIZE: u32 = 500;
 
 // timing (app.rs)
 pub const MOUSE_PRESS_THRESHOLD_MS: u64 = 200;
@@ -141,11 +143,13 @@ macro_rules! create_vec2 {
     };
 }
 
+// TODO(TOM): add world pos
 create_vec2!(GamePos, x, y);
 create_vec2!(WindowPos, x, y);
 create_vec2!(GameSize, width, height);
 create_vec2!(WindowSize, width, height);
 
+// TODO(TOM): implement .to_world() -> WorldPos for game vec2
 // region: Impl Vec2 Items
 impl<T: Num + Copy> GamePos<T> {
     pub fn to_window(self, scale: T) -> WindowPos<T> {
@@ -214,6 +218,8 @@ pub enum Shape {
     CircleOutline,
     CircleFill,
     SquareCentered,
+    Line,
+    Arrow,
     Count,
 }
 
@@ -280,6 +286,13 @@ impl Shape {
                         lambda(x_off, y_off);
                     }
                 }
+            }
+            Self::Line => {
+                // line
+            }
+            Self::Arrow => {
+                // bresenham's line algorithm. point => len
+                // line either side of mouse cursor (arrow-ness)
             }
             Self::Count => {
                 panic!("Shape::Count is not a valid shape");
