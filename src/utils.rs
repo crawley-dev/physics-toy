@@ -1,10 +1,14 @@
 // Is the colour trait implemented for each format
 // with each function hanging off the type or off the instance
 
-use core::fmt;
 use educe::Educe;
 use num::{Num, ToPrimitive};
-use std::cell::UnsafeCell;
+use paste::paste;
+use std::{
+    cell::UnsafeCell,
+    fmt,
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 // Colours (cell_sim.rs / gravity_sim.rs)
@@ -26,9 +30,9 @@ pub const INIT_TITLE: &str = "Gravity Sim";
 pub const INIT_WIDTH: u32 = 1600;
 pub const INIT_HEIGHT: u32 = 1200;
 pub const INIT_SCALE: u32 = 3;
-pub const INIT_DRAW_SIZE: u32 = 8;
+pub const INIT_DRAW_SIZE: i32 = 8;
 pub const SIM_MAX_SCALE: u32 = 10;
-pub const MAX_DRAW_SIZE: u32 = 500;
+pub const MAX_DRAW_SIZE: i32 = 500;
 
 // timing (app.rs)
 pub const MOUSE_PRESS_THRESHOLD_MS: u64 = 200;
@@ -38,6 +42,39 @@ pub const TARGET_FPS: f64 = 60.0;
 pub const FRAME_TIME_MS: f64 = 1000.0 / TARGET_FPS;
 pub const MS_BUFFER: f64 = 3.0;
 
+macro_rules! impl_vec2_op {
+    ($name:ident, $param1:ident, $param2: ident, $op_name:ident) => {
+        paste! {
+            impl<T: Num + Copy> $name<T>{
+                pub fn [<$op_name:lower>]<T2: Num + Copy + Into<T>>(self, rhs: $name<T2>)-> Self
+                {
+                    Self {
+                        $param1: self.$param1.[<$op_name:lower>](rhs.$param1.into()),
+                        $param2: self.$param2.[<$op_name:lower>](rhs.$param2.into()),
+                    }
+                }
+                pub fn [<$op_name:lower _sep>]<T2: Num + Copy + Into<T>>(self, p1: T2, p2: T2) -> Self {
+                    Self {
+                        $param1: self.$param1.[<$op_name:lower>](p1.into()),
+                        $param2: self.$param2.[<$op_name:lower>](p2.into()),
+                    }
+                }
+                pub fn [<$op_name:lower _scalar>]<T2: Num + Copy + Into<T>>(self, scalar: T2) -> Self {
+                    Self {
+                        $param1: self.$param1.[<$op_name:lower>](scalar.into()),
+                        $param2: self.$param2.[<$op_name:lower>](scalar.into()),
+                    }
+                }
+            }
+            impl<T: Num + Copy + [<$op_name Assign>]> [<$op_name Assign>] for $name<T> {
+                fn [<$op_name:lower _assign>](&mut self, rhs: Self) {
+                    self.$param1.[<$op_name:lower _assign>](rhs.$param1);
+                    self.$param2.[<$op_name:lower _assign>](rhs.$param2);
+                }
+            }
+        }
+    };
+}
 macro_rules! create_vec2 {
     ($name:ident, $param1:ident, $param2: ident) => {
         #[derive(Educe, Clone, Copy, PartialEq, Eq)]
@@ -70,36 +107,13 @@ macro_rules! create_vec2 {
                     $param2: f(self.$param2),
                 }
             }
-
-            pub fn add<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
-                Self {
-                    $param1: self.$param1 + p1.into(),
-                    $param2: self.$param2 + p2.into(),
-                }
-            }
-
-            pub fn sub<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
-                Self {
-                    $param1: self.$param1 - p1.into(),
-                    $param2: self.$param2 - p2.into(),
-                }
-            }
-
-            pub fn div<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
-                Self {
-                    $param1: self.$param1 / p1.into(),
-                    $param2: self.$param2 / p2.into(),
-                }
-            }
-
-            pub fn mul<T2: Num + Copy + Into<T>>(&self, p1: T2, p2: T2) -> Self {
-                Self {
-                    $param1: self.$param1 * p1.into(),
-                    $param2: self.$param2 * p2.into(),
-                }
-            }
         }
 
+        impl_vec2_op!($name, $param1, $param2, Add);
+        impl_vec2_op!($name, $param1, $param2, Sub);
+        impl_vec2_op!($name, $param1, $param2, Mul);
+        impl_vec2_op!($name, $param1, $param2, Div);
+        // region: From Implementations
         impl<T: Num + Copy> From<(T, T)> for $name<T> {
             fn from((a, b): (T, T)) -> Self {
                 Self {
@@ -140,6 +154,7 @@ macro_rules! create_vec2 {
                 }
             }
         }
+        // endregion
     };
 }
 
@@ -224,7 +239,7 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub fn draw<F: FnMut(i32, i32)>(self, size: u32, mut lambda: F) {
+    pub fn draw<F: FnMut(i32, i32)>(self, size: i32, mut lambda: F) {
         match self {
             Self::CircleOutline => {
                 let mut x = 0;
@@ -289,10 +304,12 @@ impl Shape {
             }
             Self::Line => {
                 // line
+                todo!("line algo")
             }
             Self::Arrow => {
                 // bresenham's line algorithm. point => len
                 // line either side of mouse cursor (arrow-ness)
+                todo!("arrow algo")
             }
             Self::Count => {
                 panic!("Shape::Count is not a valid shape");
@@ -333,10 +350,11 @@ impl Rgba {
     }
 }
 
-// This is because buf accesses don't need to be thread safe, enables parallel rendering.
-// UnsafeCell doesn't have any sync gurantees, so we have to create a wrapper
+// This is a simple wrapper on UnsafeCell for parallelism. (impl Sync)
+// UnsafeCell is an unsafe primitive for interior mutability (bypassing borrow checker)
+// UnsafeCell provides no thread safety gurantees, I don't care though so I made this wrapper
 pub struct SyncCell<T>(UnsafeCell<T>);
-unsafe impl<T> Sync for SyncCell<T> where T: Send {}
+unsafe impl<T: Send> Sync for SyncCell<T> {}
 impl<T> SyncCell<T> {
     pub const fn new(val: T) -> Self {
         Self(UnsafeCell::new(val))

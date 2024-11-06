@@ -34,10 +34,10 @@ pub struct Cell {
 
 #[derive(Debug, Clone, Copy)]
 struct State {
-    frame: u64,
-    draw_size: u32,
+    frame: usize,
+    draw_size: i32,
     draw_shape: Shape,
-    scale: u32,
+    scale: i32,
     running: bool,
     step_sim: bool,
     mouse: WindowPos<f64>,
@@ -47,8 +47,8 @@ pub struct CellSim {
     state: State,
     prev_state: State,
 
-    window_size: WindowSize<u32>,
-    sim_size: GameSize<u32>,
+    window_size: WindowSize<i32>,
+    sim_size: GameSize<i32>,
     sim_buf: Vec<Cell>,
     buf: Vec<u8>, // TODO(TOM): swap this out for a [u8] buffer.
 }
@@ -58,43 +58,19 @@ impl Frontend for CellSim {
     fn get_sim_data(&self) -> SimData<'_> {
         SimData {
             buf: &self.buf,
-            size: self.sim_size,
+            size: self.sim_size.map(|n| n as u32),
             frame: self.state.frame,
         }
     }
 
     fn get_scale(&self) -> u32 {
-        self.state.scale
-    }
-
-    fn draw_pressed(&mut self, pos: WindowPos<f64>) {
-        // draw is already bounded by the window size, so no need to check bounds here.
-        let cell = pos.to_game(f64::from(self.state.scale));
-
-        self.state
-            .draw_shape
-            .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
-                let off_pos = cell.add(off_x, off_y).clamp(
-                    (0.0, 0.0).into(),
-                    self.sim_size.to_pos().map(|n| f64::from(n) - 1.0),
-                );
-                let cell = self.get_cell_mut(off_pos.map(|n| n as u32));
-                cell.to_material = Material::Alive;
-                cell.updated = true;
-            });
-    }
-
-    fn draw_held(&mut self, pos: WindowPos<f64>) {
-        self.draw_pressed(pos);
-    }
-
-    fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>) {
-        trace!("not used.");
+        self.state.scale as u32
     }
     // endregion
     // region: Sim Manipulation
     // TODO(TOM): resize from the centre of the screen, not the top left || from mouse with scroll wheel.
     fn resize_sim(&mut self, window: WindowSize<u32>) {
+        let window = window.map(|n| n as i32);
         let new_sim_size = window.to_game(self.state.scale);
         if new_sim_size == self.sim_size {
             info!("Sim size unchanged, skipping resize. {new_sim_size:?}");
@@ -137,25 +113,14 @@ impl Frontend for CellSim {
     }
 
     fn rescale_sim(&mut self, scale: u32) {
+        let scale = scale as i32;
         if self.state.scale == scale {
             info!("Sim scale unchanged, skipping rescale. {}", scale);
             return;
         }
         info!("New scale: {} | {:?}", scale, self.window_size);
         self.state.scale = scale;
-        self.resize_sim(self.window_size);
-    }
-
-    fn reset_sim(&mut self) {
-        todo!("cell_sim::reset_sim")
-    }
-
-    fn clear_sim(&mut self) {
-        for y in 0..self.sim_size.height {
-            for x in 0..self.sim_size.width {
-                self.update_cell((x, y).into(), Material::Dead);
-            }
-        }
+        self.resize_sim(self.window_size.map(|n| n as u32));
     }
     // endregion
     // region: update
@@ -189,8 +154,8 @@ impl Frontend for CellSim {
         }
 
         // Branchless Draw Size Change
-        self.state.draw_size += inputs.is_pressed(KeyCode::ArrowUp) as u32;
-        self.state.draw_size -= inputs.is_pressed(KeyCode::ArrowDown) as u32;
+        self.state.draw_size += inputs.is_pressed(KeyCode::ArrowUp) as i32;
+        self.state.draw_size -= inputs.is_pressed(KeyCode::ArrowDown) as i32;
         self.state.draw_size = self.state.draw_size.clamp(1, MAX_DRAW_SIZE);
 
         // Cycle shape on Tab
@@ -211,7 +176,7 @@ impl Frontend for CellSim {
         }
     }
 
-    fn update(&mut self, inputs: &mut InputData) {
+    fn update(&mut self) {
         if self.state.running || self.state.step_sim {
             self.update_gol();
         }
@@ -263,31 +228,31 @@ impl CellSim {
     // TODO(TOM): adjacent  using an index, not Pos<T>
 
     #[inline]
-    const fn get_index(&self, pos: GamePos<u32>) -> usize {
+    const fn get_index(&self, pos: GamePos<i32>) -> usize {
         (pos.y * self.sim_size.width + pos.x) as usize
     }
 
     #[inline]
-    const fn get_index_texture(&self, pos: GamePos<u32>) -> usize {
+    const fn get_index_texture(&self, pos: GamePos<i32>) -> usize {
         4 * (pos.y * self.sim_size.width + pos.x) as usize
     }
 
     #[inline]
-    fn get_cell(&self, pos: GamePos<u32>) -> &Cell {
+    fn get_cell(&self, pos: GamePos<i32>) -> &Cell {
         assert!(!self.out_of_bounds(pos));
         let index = self.get_index(pos);
         &self.sim_buf[index]
     }
 
     #[inline]
-    fn get_cell_mut(&mut self, pos: GamePos<u32>) -> &mut Cell {
+    fn get_cell_mut(&mut self, pos: GamePos<i32>) -> &mut Cell {
         assert!(!self.out_of_bounds(pos));
         let index = self.get_index(pos);
         &mut self.sim_buf[index]
     }
 
     #[inline]
-    fn update_cell(&mut self, pos: GamePos<u32>, material: Material) {
+    fn update_cell(&mut self, pos: GamePos<i32>, material: Material) {
         let cell = self.get_cell_mut(pos);
         cell.material = material;
         cell.updated = false;
@@ -295,7 +260,7 @@ impl CellSim {
     }
 
     #[inline]
-    fn update_rgba(&mut self, pos: GamePos<u32>, material: Material) {
+    fn update_rgba(&mut self, pos: GamePos<i32>, material: Material) {
         let rgba = material.get_rgb();
         let index = self.get_index_texture(pos);
         self.buf[index + 0] = rgba.r;
@@ -303,10 +268,47 @@ impl CellSim {
         self.buf[index + 2] = rgba.b;
     }
 
-    const fn out_of_bounds(&self, pos: GamePos<u32>) -> bool {
+    const fn out_of_bounds(&self, pos: GamePos<i32>) -> bool {
         pos.x >= self.sim_size.width || pos.y >= self.sim_size.height
     }
 
+    fn reset_sim(&mut self) {
+        todo!("cell_sim::reset_sim")
+    }
+
+    fn clear_sim(&mut self) {
+        for y in 0..self.sim_size.height {
+            for x in 0..self.sim_size.width {
+                self.update_cell((x, y).into(), Material::Dead);
+            }
+        }
+    }
+    // endregion
+    // region: Drawing
+    fn draw_pressed(&mut self, pos: WindowPos<f64>) {
+        // draw is already bounded by the window size, so no need to check bounds here.
+        let cell = pos.to_game(f64::from(self.state.scale));
+
+        self.state
+            .draw_shape
+            .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
+                let off_pos = cell.add_sep(off_x, off_y).clamp(
+                    (0.0, 0.0).into(),
+                    self.sim_size.to_pos().map(|n| f64::from(n) - 1.0),
+                );
+                let cell = self.get_cell_mut(off_pos.map(|n| n as i32));
+                cell.to_material = Material::Alive;
+                cell.updated = true;
+            });
+    }
+
+    fn draw_held(&mut self, pos: WindowPos<f64>) {
+        self.draw_pressed(pos);
+    }
+
+    fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>) {
+        trace!("not used.");
+    }
     // endregion
     // region: Update
     // TODO(TOM): convert to a delta checker/updater (check all alive cells and their neighbours)
@@ -355,9 +357,11 @@ impl CellSim {
         self.state
             .draw_shape
             .draw(self.state.draw_size, |off_x: i32, off_y: i32| {
-                let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1) as i32) as u32;
-                let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1) as i32) as u32;
+                // avoids u32 underflow
+                let x = (mouse.x as i32 + off_x).clamp(0, self.sim_size.width - 1);
+                let y = (mouse.y as i32 + off_y).clamp(0, self.sim_size.height - 1);
                 let index = 4 * (y * self.sim_size.width + x) as usize;
+
                 self.buf[index + 0] = colour.r;
                 self.buf[index + 1] = colour.g;
                 self.buf[index + 2] = colour.b;
@@ -371,12 +375,10 @@ impl CellSim {
         self.prev_state
             .draw_shape
             .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
-                let pos = mouse.add(f64::from(off_x), f64::from(off_y)).clamp(
-                    (0.0, 0.0).into(),
-                    self.sim_size.to_pos().map(|n| f64::from(n) - 1.0),
-                );
-                let index = 4 * (pos.y as u32 * self.sim_size.width + pos.x as u32) as usize;
-
+                // avoids u32 underflow
+                let x = (mouse.x as i32 + off_x).clamp(0, self.sim_size.width - 1);
+                let y = (mouse.y as i32 + off_y).clamp(0, self.sim_size.height - 1);
+                let index = 4 * (y * self.sim_size.width + x) as usize;
                 if self.buf[index + 0] == colour.r
                     && self.buf[index + 1] == colour.g
                     && self.buf[index + 2] == colour.b
@@ -386,20 +388,22 @@ impl CellSim {
                     self.buf[index + 1] = BACKGROUND.g;
                     self.buf[index + 2] = BACKGROUND.b;
                     self.buf[index + 3] = BACKGROUND.a;
-                } else {
-                    // do nothing, its all good!
-                    //self.buf[index + 0] = self.buf[index + 0];
-                    //self.buf[index + 1] = self.buf[index + 1];
-                    //self.buf[index + 2] = self.buf[index + 2];
-                    //self.buf[index + 3] = self.buf[index + 3];
                 }
+                // do nothing, its all good!
+                // else {
+                //self.buf[index + 0] = self.buf[index + 0];
+                //self.buf[index + 1] = self.buf[index + 1];
+                //self.buf[index + 2] = self.buf[index + 2];
+                //self.buf[index + 3] = self.buf[index + 3];
+                // }
             });
     }
 
     // endregion
     pub fn new(window: WindowSize<u32>, scale: u32) -> Self {
+        let scale = scale as i32;
+        let window = window.map(|n| n as i32);
         assert!(window.width > 0 && window.height > 0 && scale > 0);
-
         let sim_size = window.to_game(scale);
         let cell_count = (sim_size.width * sim_size.height) as usize;
 

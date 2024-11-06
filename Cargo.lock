@@ -2175,6 +2175,7 @@ dependencies = [
  "log",
  "num",
  "optick",
+ "paste",
  "pollster",
  "rand",
  "rayon",

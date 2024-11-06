@@ -74,7 +74,7 @@ pub struct App<'a, F: Frontend + 'a> {
 }
 
 // https://sotrh.github.io/learn-wgpu/beginner/tutorial2-surface/#backend-new
-impl<'a, F: Frontend + 'a> App<'a, F> {
+impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
     pub fn init(title: &str, window_size: WindowSize<u32>) -> (EventLoop<()>, Window) {
         assert!(window_size.width > 0 && window_size.height > 0);
 
@@ -191,8 +191,10 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
                             &mut self.backend,
                             &mut self.inputs,
                         );
+
                         self.frontend.handle_inputs(&mut self.inputs);
-                        self.frontend.update(&mut self.inputs);
+                        self.frontend.update();
+
                         Self::clear_inputs(&mut self.inputs);
 
                         let sim_data = self.frontend.get_sim_data();
@@ -264,7 +266,7 @@ impl<'a, F: Frontend + 'a> App<'a, F> {
     }
 
     // TODO(TOM): instead of sleeping, have multiple frames in flight, prob max 2 (front & back buffer)
-    fn timing(frame: u64, start: Instant, frame_timer: &mut Instant) {
+    fn timing(frame: usize, start: Instant, frame_timer: &mut Instant) {
         optick::event!("App::timing");
 
         let elapsed = frame_timer.elapsed();
