@@ -1,4 +1,11 @@
-use crate::{backend::Backend, frontend::Frontend, utils::*};
+use crate::{
+    backend::Backend,
+    frontend::Frontend,
+    utils::{
+        vec2, RenderSpace, ScreenSpace, Vec2, FRAME_TIME_MS, KEY_COOLDOWN_MS, MOUSE_COOLDOWN_MS,
+        MOUSE_PRESS_THRESHOLD_MS, MS_BUFFER, SIM_MAX_SCALE,
+    },
+};
 use educe::Educe;
 use log::{info, trace, warn};
 use std::{
@@ -6,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 use winit::{
+    dpi::PhysicalSize,
     event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
     event_loop::{EventLoop, EventLoopWindowTarget},
     keyboard::{KeyCode, PhysicalKey},
@@ -16,14 +24,14 @@ use winit::{
 #[educe(Debug)]
 pub struct MouseInput {
     pub state: bool,
-    pub pos: WindowPos<f64>,
+    pub pos: Vec2<f64, ScreenSpace>,
     pub time: Instant,
 }
 
 #[derive(Educe, Clone, Copy)]
 #[educe(Debug)]
 pub struct InputData {
-    pub mouse: WindowPos<f64>,
+    pub mouse: Vec2<f64, ScreenSpace>,
     pub mouse_cooldown: Instant,
     pub mouse_pressed: MouseInput,
     pub mouse_released: MouseInput,
@@ -75,16 +83,13 @@ pub struct App<'a, F: Frontend + 'a> {
 
 // https://sotrh.github.io/learn-wgpu/beginner/tutorial2-surface/#backend-new
 impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
-    pub fn init(title: &str, window_size: WindowSize<u32>) -> (EventLoop<()>, Window) {
-        assert!(window_size.width > 0 && window_size.height > 0);
+    pub fn init(title: &str, window_size: Vec2<u32, ScreenSpace>) -> (EventLoop<()>, Window) {
+        assert!(window_size.x > 0 && window_size.y > 0);
 
         let event_loop = EventLoop::new().unwrap();
         let window = WindowBuilder::new()
             .with_title(title)
-            .with_inner_size(winit::dpi::PhysicalSize::new(
-                window_size.width,
-                window_size.height,
-            ))
+            .with_inner_size(PhysicalSize::new(window_size.x, window_size.y))
             .build(&event_loop)
             .unwrap();
 
@@ -99,16 +104,16 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
             frontend,
             backend,
             inputs: InputData {
-                mouse: (0.0, 0.0).into(),
+                mouse: vec2(0.0, 0.0),
                 mouse_cooldown: Instant::now(),
                 mouse_pressed: MouseInput {
                     state: false,
-                    pos: (0.0, 0.0).into(),
+                    pos: vec2(0.0, 0.0),
                     time: Instant::now(),
                 },
                 mouse_released: MouseInput {
                     state: false,
-                    pos: (0.0, 0.0).into(),
+                    pos: vec2(0.0, 0.0),
                     time: Instant::now(),
                 },
                 keys_held: [false; 256],
@@ -166,18 +171,18 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
                         }
                     },
                     WindowEvent::CursorMoved { position, .. } => {
-                        self.inputs.mouse = WindowPos::from(*position);
+                        self.inputs.mouse = vec2(position.x, position.y);
                     }
                     WindowEvent::Resized(physical_size) => {
                         if self.backend.window.is_minimized().unwrap() {
                             return;
                         }
+                        let size = vec2(physical_size.width, physical_size.height);
 
                         optick::event!("Window Resize");
 
-                        self.frontend.resize_sim(WindowSize::from(*physical_size));
-                        self.backend
-                            .resize(*physical_size, &self.frontend.get_sim_data());
+                        self.frontend.resize_sim(size);
+                        self.backend.resize(size, &self.frontend.get_sim_data());
                     }
                     WindowEvent::RedrawRequested if window_id == self.backend.window.id() => {
                         if self.backend.window.is_minimized().unwrap() {

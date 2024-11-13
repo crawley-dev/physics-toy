@@ -2,11 +2,12 @@
 // with each function hanging off the type or off the instance
 
 use educe::Educe;
-use num::{Num, ToPrimitive};
+use num::{Num, NumCast};
 use paste::paste;
 use std::{
     cell::UnsafeCell,
     fmt,
+    marker::PhantomData,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -42,6 +43,7 @@ pub const TARGET_FPS: f64 = 60.0;
 pub const FRAME_TIME_MS: f64 = 1000.0 / TARGET_FPS;
 pub const MS_BUFFER: f64 = 3.0;
 
+/*
 macro_rules! impl_vec2_op {
     ($name:ident, $param1:ident, $param2: ident, $op_name:ident) => {
         paste! {
@@ -74,7 +76,73 @@ macro_rules! impl_vec2_op {
             }
         }
     };
+create_vec2!(GamePos, x, y);
+create_vec2!(WindowPos, x, y);
+create_vec2!(GameSize, width, height);
+create_vec2!(WindowSize, width, height);
+// TODO(TOM): implement .to_world() -> WorldPos for game vec2
+// region: Impl Vec2 Items
+impl<T: Num + Copy> GamePos<T> {
+    pub fn to_window(self, scale: T) -> WindowPos<T> {
+        WindowPos {
+            x: self.x * scale,
+            y: self.y * scale,
+        }
+    }
+    pub const fn to_size(self) -> GameSize<T> {
+        GameSize {
+            width: self.x,
+            height: self.y,
+        }
+    }
 }
+impl<T: Num + Copy> WindowPos<T> {
+    pub fn to_game(self, scale: T) -> GamePos<T> {
+        GamePos {
+            x: self.x / scale,
+            y: self.y / scale,
+        }
+    }
+    pub const fn to_size(self) -> WindowSize<T> {
+        WindowSize {
+            width: self.x,
+            height: self.y,
+        }
+    }
+}
+impl<T: Num + Copy> GameSize<T> {
+    pub fn to_window(self, scale: T) -> WindowSize<T> {
+        WindowSize {
+            width: self.width * scale,
+            height: self.height * scale,
+        }
+    }
+
+    pub const fn to_pos(self) -> GamePos<T> {
+        GamePos {
+            x: self.width,
+            y: self.height,
+        }
+    }
+}
+impl<T: Num + Copy> WindowSize<T> {
+    pub fn to_game(self, scale: T) -> GameSize<T> {
+        GameSize {
+            width: self.width / scale,
+            height: self.height / scale,
+        }
+    }
+
+    pub const fn to_pos(self) -> WindowPos<T> {
+        WindowPos {
+            x: self.width,
+            y: self.height,
+        }
+    }
+}
+// endregion
+ */
+/*
 macro_rules! create_vec2 {
     ($name:ident, $param1:ident, $param2: ident) => {
         #[derive(Educe, Clone, Copy, PartialEq, Eq)]
@@ -154,78 +222,151 @@ macro_rules! create_vec2 {
                 }
             }
         }
-        // endregion
+    };
+}
+*/
+
+// region: Vec2
+pub trait CoordSpace {}
+macro_rules! create_coordinate_space {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct $name;
+        impl CoordSpace for $name {}
+    };
+}
+create_coordinate_space!(ScreenSpace);
+create_coordinate_space!(RenderSpace);
+create_coordinate_space!(WorldSpace);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Scale<T: Num + Copy + Mul, Src: CoordSpace, Dst: CoordSpace>(T, PhantomData<(Src, Dst)>);
+impl<T: Num + Copy + Mul, Src: CoordSpace, Dst: CoordSpace> Scale<T, Src, Dst> {
+    pub fn new(val: T) -> Self {
+        Self(val, PhantomData)
+    }
+
+    pub fn get(&self) -> T {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Vec2<T, U: CoordSpace> {
+    pub x: T,
+    pub y: T,
+    _unit: PhantomData<U>,
+}
+
+#[inline]
+pub fn vec2<T, U: CoordSpace>(p1: T, p2: T) -> Vec2<T, U> {
+    Vec2 {
+        x: p1,
+        y: p2,
+        _unit: PhantomData,
+    }
+}
+
+impl<T: Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
+    pub fn clamp(self, min: Vec2<T, U>, max: Vec2<T, U>) -> Vec2<T, U>
+    where
+        T: PartialOrd,
+    {
+        Vec2 {
+            x: num::clamp(self.x, min.x, max.x),
+            y: num::clamp(self.y, min.y, max.y),
+            _unit: PhantomData,
+        }
+    }
+
+    pub fn map<T2, F: Fn(T) -> T2>(self, f: F) -> Vec2<T2, U> {
+        Vec2 {
+            x: f(self.x),
+            y: f(self.y),
+            _unit: PhantomData,
+        }
+    }
+
+    pub fn cast<DstT: NumCast>(self) -> Vec2<DstT, U> {
+        Vec2 {
+            x: DstT::from(self.x).unwrap(),
+            y: DstT::from(self.y).unwrap(),
+            _unit: PhantomData,
+        }
+    }
+
+    pub fn cast_unit<DstU: CoordSpace>(self) -> Vec2<T, DstU> {
+        Vec2 {
+            x: self.x,
+            y: self.y,
+            _unit: PhantomData,
+        }
+    }
+
+    pub fn to_array(self) -> [T; 2] {
+        [self.x, self.y]
+    }
+
+    pub fn scale<SrcT: Num + Copy + NumCast, Dst: CoordSpace>(
+        self,
+        scale: Scale<SrcT, U, Dst>,
+    ) -> Vec2<T, Dst>
+    where
+        T: Mul,
+    {
+        Vec2 {
+            x: self.x / T::from(scale.get()).unwrap(),
+            y: self.y / T::from(scale.get()).unwrap(),
+            _unit: PhantomData,
+        }
+    }
+}
+
+macro_rules! impl_vec2_op {
+    ($op_name:ident) => {
+        paste! {
+            impl<T: $op_name<Output = T> + Copy, U: CoordSpace> $op_name for Vec2<T,U> {
+                type Output = Vec2<T, U>;
+                fn [<$op_name:lower>](self, rhs: Self) -> Self::Output {
+                    Vec2 {
+                        x: self.x.[<$op_name:lower>](rhs.x),
+                        y: self.y.[<$op_name:lower>](rhs.y),
+                        _unit: PhantomData,
+                    }
+                }
+            }
+            impl<T: $op_name<Output = T> + Copy, U: CoordSpace> $op_name<T> for Vec2<T,U> {
+                type Output = Vec2<T, U>;
+                fn [<$op_name:lower>](self, rhs: T) -> Self::Output {
+                    Vec2 {
+                        x: self.x.[<$op_name:lower>](rhs),
+                        y: self.y.[<$op_name:lower>](rhs),
+                        _unit: PhantomData,
+                    }
+                }
+            }
+            impl<T: [<$op_name Assign>] + Copy, U: CoordSpace> [<$op_name Assign>] for Vec2<T, U> {
+                fn [<$op_name:lower _assign>](&mut self, rhs: Vec2<T, U>) {
+                    self.x.[<$op_name:lower _assign>](rhs.x);
+                    self.y.[<$op_name:lower _assign>](rhs.y);
+                }
+            }
+            impl<T: [<$op_name Assign>] + Copy, U: CoordSpace> [<$op_name Assign>]<T> for Vec2<T, U> {
+                fn [<$op_name:lower _assign>](&mut self, rhs: T) {
+                    self.x.[<$op_name:lower _assign>](rhs);
+                    self.y.[<$op_name:lower _assign>](rhs);
+                }
+            }
+        }
     };
 }
 
-// TODO(TOM): add world pos
-create_vec2!(GamePos, x, y);
-create_vec2!(WindowPos, x, y);
-create_vec2!(GameSize, width, height);
-create_vec2!(WindowSize, width, height);
-
-// TODO(TOM): implement .to_world() -> WorldPos for game vec2
-// region: Impl Vec2 Items
-impl<T: Num + Copy> GamePos<T> {
-    pub fn to_window(self, scale: T) -> WindowPos<T> {
-        WindowPos {
-            x: self.x * scale,
-            y: self.y * scale,
-        }
-    }
-    pub const fn to_size(self) -> GameSize<T> {
-        GameSize {
-            width: self.x,
-            height: self.y,
-        }
-    }
-}
-impl<T: Num + Copy> WindowPos<T> {
-    pub fn to_game(self, scale: T) -> GamePos<T> {
-        GamePos {
-            x: self.x / scale,
-            y: self.y / scale,
-        }
-    }
-    pub const fn to_size(self) -> WindowSize<T> {
-        WindowSize {
-            width: self.x,
-            height: self.y,
-        }
-    }
-}
-impl<T: Num + Copy> GameSize<T> {
-    pub fn to_window(self, scale: T) -> WindowSize<T> {
-        WindowSize {
-            width: self.width * scale,
-            height: self.height * scale,
-        }
-    }
-
-    pub const fn to_pos(self) -> GamePos<T> {
-        GamePos {
-            x: self.width,
-            y: self.height,
-        }
-    }
-}
-impl<T: Num + Copy> WindowSize<T> {
-    pub fn to_game(self, scale: T) -> GameSize<T> {
-        GameSize {
-            width: self.width / scale,
-            height: self.height / scale,
-        }
-    }
-
-    pub const fn to_pos(self) -> WindowPos<T> {
-        WindowPos {
-            x: self.width,
-            y: self.height,
-        }
-    }
-}
+impl_vec2_op!(Add);
+impl_vec2_op!(Sub);
+impl_vec2_op!(Mul);
+impl_vec2_op!(Div);
 // endregion
-
+// region: Shape
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(dead_code)] // don't match shape, I index into it (app::handle_inputs)
@@ -317,7 +458,8 @@ impl Shape {
         }
     }
 }
-
+// endregion
+// region: Rgba
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Rgba {
     pub r: u8,
@@ -325,7 +467,6 @@ pub struct Rgba {
     pub b: u8,
     pub a: u8,
 }
-
 #[allow(dead_code)] // maybe one day I will use this
 impl Rgba {
     pub const fn as_u32(self) -> u32 {
@@ -348,7 +489,7 @@ impl Rgba {
             a: (colour & 0xFF) as u8,
         }
     }
-}
+} // endregion
 
 // This is a simple wrapper on UnsafeCell for parallelism. (impl Sync)
 // UnsafeCell is an unsafe primitive for interior mutability (bypassing borrow checker)

@@ -7,7 +7,10 @@ use educe::Educe;
 use log::{info, trace};
 use num::pow::Pow;
 use rayon::prelude::*;
-use std::mem::transmute;
+use std::{
+    mem::transmute,
+    ops::{Add, Div, Mul, Sub},
+};
 use winit::keyboard::KeyCode;
 
 /*
@@ -24,9 +27,9 @@ use winit::keyboard::KeyCode;
 #[educe(Debug)]
 struct Particle {
     #[educe(Debug(method(fmt_limited_precision)))]
-    pos: GamePos<f64>,
+    pos: Vec2<f64, WorldSpace>,
     #[educe(Debug(method(fmt_limited_precision)))]
-    vel: GamePos<f64>,
+    vel: Vec2<f64, WorldSpace>,
     #[educe(Debug(method(fmt_limited_precision)))]
     mass: f64,
     #[educe(Debug(method(fmt_limited_precision)))]
@@ -38,10 +41,10 @@ struct State {
     frame: usize,
     draw_size: i32,
     draw_shape: Shape,
-    scale: i32,
+    scale: Scale<i32, ScreenSpace, RenderSpace>,
     running: bool,
     step_sim: bool,
-    mouse: WindowPos<f64>,
+    mouse: Vec2<f64, ScreenSpace>,
 }
 
 #[derive(Educe, Clone)]
@@ -52,10 +55,10 @@ pub struct GravitySim {
     prev_state: State,
 
     // thread_pool: ThreadPool,
-    window_size: WindowSize<i32>,
-    sim_size: GameSize<i32>,
-    camera: GamePos<f64>, // describes the top left of the viewport.
-    camera_vel: GamePos<f64>,
+    window_size: Vec2<i32, ScreenSpace>,
+    sim_size: Vec2<i32, RenderSpace>,
+    camera: Vec2<f64, WorldSpace>, // describes the top left of the viewport.
+    camera_vel: Vec2<f64, WorldSpace>,
     #[educe(Debug(ignore))]
     bufs: [Vec<SyncCell<u8>>; 2],
     front_buffer: usize,
@@ -70,50 +73,59 @@ impl Frontend for GravitySim {
         let buf_slice = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) };
         SimData {
             buf: buf_slice,
-            size: self.sim_size.map(|n| n as u32),
+            size: self.sim_size.cast(),
             frame: self.state.frame,
         }
     }
 
     fn get_scale(&self) -> u32 {
-        self.state.scale as u32
+        self.state.scale.get() as u32
     }
     // endregion
     // region: Sim Manipultion
-    fn resize_sim(&mut self, window: WindowSize<u32>) {
+    fn resize_sim(&mut self, window_size: Vec2<u32, ScreenSpace>) {
         optick::event!("GravitySim::resize_sim");
 
-        let window = window.map(|n| n as i32);
-        let new_sim_size = window.to_game(self.state.scale);
+        let window_size = window_size.cast();
+        let new_sim_size = window_size.scale(self.state.scale);
+
+        assert!(
+            new_sim_size.x == window_size.x / self.state.scale.get(),
+            "{new_sim_size:?} != {window_size:?} / {}",
+            self.state.scale.get()
+        );
+
         if new_sim_size == self.sim_size {
             trace!("Sim size unchanged, skipping resize. {new_sim_size:?}");
             return;
         }
 
-        let buf_size = (new_sim_size.width * new_sim_size.height * 4) as usize;
+        let buf_size = (new_sim_size.x * new_sim_size.y * 4) as usize;
         let mut new_buf = Vec::with_capacity(buf_size);
         let mut new_buf_clone = Vec::with_capacity(buf_size);
         for _ in 0..buf_size {
             new_buf.push(SyncCell::new(44));
             new_buf_clone.push(SyncCell::new(44));
         }
+
         trace!(
-            "Resizing sim to: {new_sim_size:?} | {window:?} | scale: {} | {buf_size}",
+            "Resizing sim to: {new_sim_size:?} | {window_size:?} | scale: {:?} | {buf_size}",
             self.state.scale
         );
 
-        self.window_size = window;
+        self.window_size = window_size;
         self.sim_size = new_sim_size;
         self.bufs = [new_buf, new_buf_clone];
         // don't change particle stuff.
     }
 
     fn rescale_sim(&mut self, new_scale: u32) {
-        self.state.scale = new_scale as i32;
-        self.resize_sim(self.window_size.map(|n| n as u32));
+        self.state.scale = Scale::new(new_scale as i32);
+        self.resize_sim(self.window_size.cast::<u32>());
     }
     // endregion
     // region: Update
+
     fn handle_inputs(&mut self, inputs: &mut InputData) {
         self.state.mouse = inputs.mouse;
         assert!(
@@ -178,7 +190,7 @@ impl Frontend for GravitySim {
             }
         }
 
-        self.camera_vel = self.camera_vel.mul_scalar(CAMERA_RESISTANCE); // expand velocity til equilibrium, use easing fn?
+        self.camera_vel *= CAMERA_RESISTANCE; // expand velocity til equilibrium, use easing fn?
         self.camera += self.camera_vel;
     }
 
@@ -187,9 +199,11 @@ impl Frontend for GravitySim {
 
         {
             optick::event!("Resetting texture");
-            self.bufs[self.front_buffer]
-                .iter_mut()
-                .for_each(|x| *x.get_mut() = 44);
+            let buf_ptr = self.bufs[self.front_buffer].as_mut_ptr();
+            unsafe {
+                // .iter.map prob gets optimized to this, but just in case.
+                buf_ptr.write_bytes(44, self.bufs[self.front_buffer].len());
+            }
         }
 
         if self.state.running || self.state.step_sim {
@@ -205,13 +219,8 @@ impl Frontend for GravitySim {
 
         {
             optick::event!("Drawing Mouse Outline");
-            self.clear_mouse_outline(
-                self.prev_state
-                    .mouse
-                    .to_game(f64::from(self.prev_state.scale)),
-                GREEN,
-            );
-            self.render_mouse_outline(self.state.mouse.to_game(f64::from(self.state.scale)), GREEN);
+            self.clear_mouse_outline(GREEN);
+            self.render_mouse_outline(GREEN);
         }
 
         if self.state.frame % TARGET_FPS as usize == 0 {
@@ -242,14 +251,14 @@ impl GravitySim {
     fn init_particles() -> [SyncCell<Particle>; 2] {
         [
             SyncCell::new(Particle {
-                pos: (120.0, 120.0).into(),
-                vel: (0.0, 0.0).into(),
+                pos: vec2(120.0, 120.0),
+                vel: vec2(0.0, 0.0),
                 mass: 1.989e20,
                 radius: 69.6340,
             }),
             SyncCell::new(Particle {
-                pos: (320.0, 320.0).into(),
-                vel: (0.0, 0.0).into(),
+                pos: vec2(320.0, 320.0),
+                vel: vec2(0.0, 0.0),
                 mass: 1.989e20,
                 radius: 69.6340,
             }),
@@ -257,31 +266,30 @@ impl GravitySim {
     }
     // endregion
     // region: Drawing
-    fn draw_pressed(&mut self, pos: WindowPos<f64>) {
-        let world = pos.to_game(f64::from(self.state.scale)).add(self.camera);
+    fn draw_pressed(&mut self, pos: Vec2<f64, ScreenSpace>) {
+        let world = pos.scale(self.state.scale).cast_unit().add(self.camera);
 
         self.particles.push(SyncCell::new(Particle {
             pos: world,
-            vel: (-0.3, 0.5).into(),
+            vel: vec2(-0.3, 0.5),
             mass: 5.972e14, // 14
             radius: 6.371,
         }));
     }
 
-    fn draw_released(&mut self, pressed: WindowPos<f64>, released: WindowPos<f64>) {
-        let world_pos = pressed
-            .to_game(f64::from(self.state.scale))
-            .add(self.camera);
+    fn draw_released(&mut self, pressed: Vec2<f64, ScreenSpace>, released: Vec2<f64, ScreenSpace>) {
+        let pressed_world = pressed.scale(self.state.scale).cast_unit().add(self.camera);
 
         // using pressed, creates a drawback effect, like angry birds!
-        let game_delta = pressed.sub(released).to_game(f64::from(self.state.scale));
+        let game_pos_delta = pressed.sub(released).scale(self.state.scale);
 
-        let velocity = game_delta
-            .div(self.sim_size.to_pos())
-            .mul_scalar(MOUSE_DRAWBACK_MULTIPLIER);
+        let velocity = game_pos_delta
+            .div(self.sim_size.cast())
+            .mul(MOUSE_DRAWBACK_MULTIPLIER)
+            .cast_unit();
 
         self.particles.push(SyncCell::new(Particle {
-            pos: world_pos,
+            pos: pressed_world,
             vel: velocity,
             mass: 5.972e14, // 14
             radius: 6.371,
@@ -289,33 +297,36 @@ impl GravitySim {
     }
     // endregion
     // region: Physics
-    fn update_physics_cursor(&mut self, mouse: GamePos<f64>) {
+    fn update_physics_cursor(&mut self, mouse: Vec2<f64, ScreenSpace>) {
         optick::event!("Physics Update - Cursor");
+        let mouse = mouse.cast_unit();
 
         // All particles attract to mouse.
         self.particles
             .par_iter_mut()
             .map(|p| p.get_mut())
             .for_each(|p| {
-                let dist = p.pos.sub(mouse);
+                let dist = p.pos - mouse;
                 let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
 
-                // If collapsing in on cursor, give it some velocity.
                 if abs_dist > 5.0 {
-                    let normal = p
-                        .pos
-                        .sub(mouse)
-                        .mul_scalar(1.0 / abs_dist * PHYSICS_MULTIPLIER);
+                    // If collapsing in on cursor, give it some velocity.
+                    // let normal = p
+                    //     .pos
+                    //     .sub(mouse)
+                    //     .mul(1.0 / abs_dist * PHYSICS_MULTIPLIER);
+                    let normal = (p.pos - mouse) / abs_dist * PHYSICS_MULTIPLIER;
                     p.vel -= normal;
                 } else {
-                    let mut delta: GamePos<f64> = (-1.0, -1.0).into();
+                    let mut delta = vec2(-1.0, -1.0);
                     // Branchless!
-                    delta.x += 2.0 * ((p.vel.x < 0.0) as i32 as f64); // if true, -1 + 2 = 1
-                    delta.y += 2.0 * ((p.vel.y < 0.0) as i32 as f64); // if true, -1 + 2 = 1
-                    println!("{delta:?}");
+                    // delta.x += 2.0 * ((p.vel.x < 0.0) as i32 as f64); // if true, -1 + 2 = 1
+                    // delta.y += 2.0 * ((p.vel.y < 0.0) as i32 as f64); // if true, -1 + 2 = 1
+                    let are_vels_neg = p.vel.map(|n| (n < 0.0) as i32 as f64);
+                    delta += are_vels_neg * 2.0;
                     p.vel += delta;
                 }
-                p.vel = p.vel.mul_scalar(PHYSICS_RESISTANCE);
+                p.vel *= PHYSICS_RESISTANCE;
                 p.pos += p.vel;
             });
     }
@@ -342,38 +353,38 @@ impl GravitySim {
                     // collide entities
                     let consumer_pos = if p1.mass > p2.mass { p1.pos } else { p2.pos };
                     let new_mass = p1.mass + p2.mass;
-                    let new_momentum = p1.vel.mul_scalar(p1.mass).add(p2.vel.mul_scalar(p2.mass));
+                    let new_momentum = p1.vel * p1.mass + p2.vel * p2.mass;
                     let new_radius = f64::sqrt(p1.radius.pow(2) + p2.radius.pow(2));
 
                     *p1 = Particle {
                         pos: consumer_pos,
-                        vel: new_momentum.map(|n| n / new_mass),
+                        vel: new_momentum / new_mass,
                         mass: new_mass,
                         radius: new_radius,
                     };
 
                     // will be culled later.
                     *p2 = Particle {
-                        pos: (f64::MIN, f64::MIN).into(),
-                        vel: (0.0, 0.0).into(),
+                        pos: vec2(f64::MIN, f64::MIN),
+                        vel: vec2(0.0, 0.0),
                         mass: 0.0,
                         radius: 0.0,
                     };
                 } else {
                     // calc physics
-                    let p1_unit_vector = dist.div_scalar(abs_dist);
+                    let p1_unit_vector = dist / abs_dist;
 
                     let abs_force = GRAV_CONST * (p1.mass * p2.mass) / abs_dist.pow(2.0);
 
-                    let p1_force = p1_unit_vector.mul_scalar(abs_force);
-                    let p2_force = p1_force.mul_scalar(-1.0); // Equal and opposite!
+                    let p1_force = p1_unit_vector / abs_force;
+                    let p2_force = p1_force * -1.0; // Equal and opposite!
 
-                    p1.vel += p1_force.div_scalar(p1.mass);
-                    p2.vel += p2_force.div_scalar(p2.mass);
+                    p1.vel += p1_force / p1.mass;
+                    p2.vel += p2_force / p2.mass;
                 }
             }
             // apply resitance & update pos after all forces have been calculated.
-            p1.vel = p1.vel.mul_scalar(PHYSICS_RESISTANCE);
+            p1.vel *= PHYSICS_RESISTANCE;
             p1.pos += p1.vel;
         }
         // TODO(TOM): ideally cull particles in the same loop, mutability & iterator validity issues.
@@ -385,8 +396,8 @@ impl GravitySim {
     fn render_particles(
         texture_buf: &[SyncCell<u8>],
         particles: &[SyncCell<Particle>],
-        sim_size: GameSize<i32>,
-        camera: GamePos<f64>,
+        sim_size: Vec2<i32, RenderSpace>,
+        camera: Vec2<f64, WorldSpace>,
     ) {
         optick::event!("Update Texture Buffer");
 
@@ -397,18 +408,18 @@ impl GravitySim {
             .filter(|(pos, radius)| {
                 !(pos.x + radius < 0.0
                     || pos.y + radius < 0.0
-                    || pos.x - radius >= f64::from(sim_size.width)
-                    || pos.y - radius >= f64::from(sim_size.height))
+                    || pos.x - radius >= f64::from(sim_size.x)
+                    || pos.y - radius >= f64::from(sim_size.y))
             })
             .for_each(|(pos, radius)| {
                 Shape::CircleOutline.draw(radius as i32, |off_x: i32, off_y: i32| {
-                    let offset = pos.map(|n| n as i32).add_sep(off_x, off_y);
+                    let offset = pos.map(|n| n as i32) + vec2(off_x, off_y);
                     if !(offset.x < 0
                         || offset.y < 0
-                        || offset.x >= sim_size.width
-                        || offset.y >= sim_size.height)
+                        || offset.x >= sim_size.x
+                        || offset.y >= sim_size.y)
                     {
-                        let index = 4 * (offset.y * sim_size.width + offset.x) as usize;
+                        let index = 4 * (offset.y * sim_size.x + offset.x) as usize;
 
                         *texture_buf[index + 0].get_mut() = WHITE.r;
                         *texture_buf[index + 1].get_mut() = WHITE.g;
@@ -420,18 +431,24 @@ impl GravitySim {
     }
 
     // TODO(TOM): make this a separate texture layer, overlayed on top of the sim
-    fn render_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+    fn render_mouse_outline(&mut self, colour: Rgba) {
         optick::event!("Rendering Mouse Outline");
+        let mouse = self.state.mouse.scale(self.state.scale);
 
         self.state
             .draw_shape
             .draw(self.state.draw_size, |off_x, off_y| {
                 // avoids u32 underflow
-                let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1));
-                let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1));
-                let index = 4 * (y * self.sim_size.width + x) as usize;
+                let mut pos = mouse.cast::<i32>() + vec2(off_x, off_y);
+                pos = pos.clamp(vec2(0, 0), self.sim_size - 1);
 
+                let index = 4 * (pos.y * self.sim_size.x + pos.x) as usize;
                 let buf = &mut self.bufs[self.front_buffer];
+                assert!(
+                    index < buf.len(),
+                    "Index: {index} | {pos:?} | {} | {self:#?}",
+                    buf.len()
+                );
                 *buf[index + 0].get_mut() = colour.r;
                 *buf[index + 1].get_mut() = colour.g;
                 *buf[index + 2].get_mut() = colour.b;
@@ -440,17 +457,18 @@ impl GravitySim {
     }
 
     // TODO(TOM): this function proper doesn't work with back buffers
-    fn clear_mouse_outline(&mut self, mouse: GamePos<f64>, colour: Rgba) {
+    fn clear_mouse_outline(&mut self, colour: Rgba) {
         optick::event!("Clearing Mouse Outline");
+        let mouse = self.prev_state.mouse.scale(self.prev_state.scale);
 
         self.prev_state
             .draw_shape
             .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
                 // avoids u32 underflow
-                let x = (mouse.x as i32 + off_x).clamp(0, (self.sim_size.width - 1));
-                let y = (mouse.y as i32 + off_y).clamp(0, (self.sim_size.height - 1));
-                let index = 4 * (y * self.sim_size.width + x) as usize;
+                let mut pos = mouse.cast::<i32>() + vec2(off_x, off_y);
+                pos = pos.clamp(vec2(0, 0), self.sim_size - 1);
 
+                let index = 4 * (pos.y * self.sim_size.x + pos.x) as usize;
                 let buf = &mut self.bufs[self.front_buffer];
                 if *buf[index + 0].get_mut() == colour.r
                     && *buf[index + 1].get_mut() == colour.g
@@ -462,23 +480,17 @@ impl GravitySim {
                     *buf[index + 2].get_mut() = BACKGROUND.b;
                     *buf[index + 3].get_mut() = BACKGROUND.a;
                 }
-                // Literally pointless lol
-                // else {
-                // *buf[index + 0].get_mut() = *buf[index + 0].get();
-                // *buf[index + 1].get_mut() = *buf[index + 1].get();
-                // *buf[index + 2].get_mut() = *buf[index + 2].get();
-                // *buf[index + 3].get_mut() = *buf[index + 3].get();
-                // }
             });
     }
     // endregion
 
-    pub fn new(size: WindowSize<u32>, scale: u32) -> Self {
-        let scale = scale as i32;
-        let size = size.map(|n| n as i32);
+    pub fn new(window_size: Vec2<u32, ScreenSpace>, scale: u32) -> Self {
+        let scale = Scale::new(scale as i32);
+        let window_size = window_size.cast();
 
-        let sim_size = size.to_game(scale);
-        let buf_size = (sim_size.width * sim_size.height * 4) as usize;
+        let sim_size = window_size.scale(scale);
+        let buf_size = (sim_size.x * sim_size.y * 4) as usize;
+
         let mut buf = Vec::with_capacity(buf_size);
         let mut buf_clone = Vec::with_capacity(buf_size);
         for _ in 0..buf_size {
@@ -496,16 +508,16 @@ impl GravitySim {
             scale,
             running: false,
             step_sim: false,
-            mouse: (0.0, 0.0).into(),
+            mouse: vec2(0.0, 0.0),
         };
         Self {
             state,
             prev_state: state,
 
-            window_size: size,
+            window_size,
             sim_size,
-            camera: (0.0, 0.0).into(),
-            camera_vel: (0.0, 0.0).into(),
+            camera: vec2(0.0, 0.0),
+            camera_vel: vec2(0.0, 0.0),
             bufs: [buf, buf_clone],
             front_buffer: 0,
             particles,

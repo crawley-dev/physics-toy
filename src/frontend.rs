@@ -1,7 +1,4 @@
-use crate::{
-    app::InputData,
-    utils::{GamePos, GameSize, Shape, WindowPos, WindowSize},
-};
+use crate::{app::InputData, utils::*};
 use educe::Educe;
 
 #[derive(Educe)]
@@ -9,7 +6,7 @@ use educe::Educe;
 pub struct SimData<'a> {
     #[educe(Debug(ignore))]
     pub buf: &'a [u8],
-    pub size: GameSize<u32>,
+    pub size: Vec2<u32, RenderSpace>,
     pub frame: usize,
 }
 
@@ -18,7 +15,7 @@ pub trait Frontend {
     fn get_sim_data(&self) -> SimData;
     fn get_scale(&self) -> u32;
 
-    fn resize_sim(&mut self, window: WindowSize<u32>);
+    fn resize_sim(&mut self, window_size: Vec2<u32, ScreenSpace>);
     fn rescale_sim(&mut self, scale: u32);
 
     fn handle_inputs(&mut self, inputs: &mut InputData);

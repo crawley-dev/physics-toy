@@ -27,7 +27,9 @@ mod gravity_sim;
 mod utils;
 
 use crate::{app::App, cell_sim::CellSim, gravity_sim::GravitySim};
-use utils::{INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
+use utils::{vec2, Vec2, INIT_HEIGHT, INIT_SCALE, INIT_TITLE, INIT_WIDTH};
+
+use log::info;
 
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
@@ -35,10 +37,9 @@ fn main() {
     env_logger::init();
 
     // EventLoop & window init in main func because borrowing..
-    let frontend = GravitySim::new((INIT_WIDTH, INIT_HEIGHT).into(), INIT_SCALE);
+    let frontend = GravitySim::new(vec2(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
 
-    let (event_loop, window) =
-        App::<GravitySim>::init(INIT_TITLE, (INIT_WIDTH, INIT_HEIGHT).into());
+    let (event_loop, window) = App::<GravitySim>::init(INIT_TITLE, vec2(INIT_WIDTH, INIT_HEIGHT));
 
     let app = App::new(event_loop, &window, frontend);
 
