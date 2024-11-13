@@ -43,6 +43,7 @@ struct State {
     mouse: Vec2<f64, ScreenSpace>,
 }
 
+#[derive(Debug, Clone)]
 pub struct CellSim {
     state: State,
     prev_state: State,
@@ -131,6 +132,7 @@ impl Frontend for CellSim {
             (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
             "Mouse state error {inputs:#?}"
         );
+
         if inputs.is_mouse_held() {
             // TODO(TOM): draw indicator arrow for direction of particle.
             self.draw_held(inputs.mouse);
@@ -185,7 +187,6 @@ impl Frontend for CellSim {
             for x in 1..self.sim_size.x - 1 {
                 let cell = self.get_cell(vec2(x, y));
                 if cell.updated {
-                    info!("updated cell: {x}, {y}");
                     self.update_cell(vec2(x, y), cell.mat_to);
                 }
             }
@@ -291,8 +292,8 @@ impl CellSim {
                 off_pos = off_pos.clamp(vec2(0, 0), self.sim_size - 1);
 
                 let cell = self.get_cell_mut(off_pos);
-                cell.mat_to = Material::Alive;
                 cell.updated = true;
+                cell.mat_to = Material::Alive;
             });
     }
 
@@ -375,10 +376,9 @@ impl CellSim {
                     && self.buf[index + 2] == colour.b
                     && self.buf[index + 3] == colour.a
                 {
-                    self.buf[index + 0] = BACKGROUND.r;
-                    self.buf[index + 1] = BACKGROUND.g;
-                    self.buf[index + 2] = BACKGROUND.b;
-                    self.buf[index + 3] = BACKGROUND.a;
+                    // if prev frame colour was cursor, get cell at the coordinate and draw that!
+                    let cell_col = self.get_cell_mut(pos).mat;
+                    self.update_rgba(pos, cell_col);
                 }
             });
     }

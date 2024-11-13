@@ -475,6 +475,8 @@ impl GravitySim {
                     && *buf[index + 2].get_mut() == colour.b
                     && *buf[index + 3].get_mut() == colour.a
                 {
+                    // TODO(TOM): this is currently ok as complete re-renders are done
+                    // will have to change this if partial re-renders are implemented.
                     *buf[index + 0].get_mut() = BACKGROUND.r;
                     *buf[index + 1].get_mut() = BACKGROUND.g;
                     *buf[index + 2].get_mut() = BACKGROUND.b;

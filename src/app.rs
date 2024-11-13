@@ -54,23 +54,37 @@ impl InputData {
     }
 
     pub fn is_mouse_held(&self) -> bool {
+        // the mouse has been pressed and held for at least MOUSE_PRESS_THRESHOLD_MS
         self.mouse_pressed.state
-            && self.mouse_pressed.time
-                > self
-                    .mouse_released
-                    .time
-                    .checked_add(Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS))
-                    .unwrap()
+            && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+
+        // self.mouse_pressed.state
+        //     && self.mouse_pressed.time
+        //         > self
+        //             .mouse_released
+        //             .time
+        //             .checked_add(Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS))
+        //             .unwrap()
+
+        // if mouse is down and has been for a bit
+        // self.mouse_pressed.state
+        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
     }
 
     pub fn was_mouse_held(&self) -> bool {
         self.mouse_released.state
-            && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+            && self.mouse_released.time - self.mouse_pressed.time
+                > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+        // self.mouse_released.state
+        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
     }
 
     pub fn was_mouse_pressed(&self) -> bool {
         self.mouse_released.state
-            && self.mouse_pressed.time.elapsed() < Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+            && self.mouse_released.time - self.mouse_pressed.time
+                < Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+        // self.mouse_released.state
+        //     && self.mouse_pressed.time.elapsed() < Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
     }
 }
 
@@ -152,6 +166,8 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
                             {
                                 // TODO(TOM): can only confirm that it was a mouse_press
                                 // and not a mouse_held, after n frames and it is released.
+                                // ^^ Not TRUE! can detect difference after MOUSE_PRESS_THRESHOLD_MS time
+
                                 self.inputs.mouse_pressed = MouseInput {
                                     state: true,
                                     pos: self.inputs.mouse,
@@ -198,6 +214,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
                         );
 
                         self.frontend.handle_inputs(&mut self.inputs);
+
                         self.frontend.update();
 
                         Self::clear_inputs(&mut self.inputs);
