@@ -127,7 +127,7 @@ impl Frontend for GravitySim {
     // region: Update
 
     fn handle_inputs(&mut self, inputs: &mut InputData) {
-        self.state.mouse = inputs.mouse;
+        self.state.mouse = inputs.mouse_pos;
         assert!(
             (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
             "Mouse state error {inputs:#?}"
@@ -142,7 +142,7 @@ impl Frontend for GravitySim {
             // })
         } else if inputs.was_mouse_pressed() {
             // Draw particle on mouse press
-            self.draw_pressed(inputs.mouse);
+            self.draw_pressed(self.state.mouse);
         }
 
         // Toggle simulation on KeySpace

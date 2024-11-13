@@ -28,16 +28,16 @@ pub const CAMERA_SPEED: f64 = 0.1;
 
 // Generic Parameters (*)
 pub const INIT_TITLE: &str = "Gravity Sim";
-pub const INIT_WIDTH: u32 = 1600;
-pub const INIT_HEIGHT: u32 = 1200;
+pub const INIT_WIDTH: u32 = 1600 / 2;
+pub const INIT_HEIGHT: u32 = 1200 / 2;
 pub const INIT_SCALE: u32 = 3;
 pub const INIT_DRAW_SIZE: i32 = 8;
 pub const SIM_MAX_SCALE: u32 = 10;
 pub const MAX_DRAW_SIZE: i32 = 500;
 
 // timing (app.rs)
-pub const MOUSE_PRESS_THRESHOLD_MS: u64 = 200;
-pub const MOUSE_COOLDOWN_MS: u64 = 250;
+pub const MOUSE_HOLD_THRESHOLD_MS: u64 = 40;
+pub const MOUSE_PRESS_COOLDOWN_MS: u64 = 100;
 pub const KEY_COOLDOWN_MS: u64 = 100;
 pub const TARGET_FPS: f64 = 60.0;
 pub const FRAME_TIME_MS: f64 = 1000.0 / TARGET_FPS;

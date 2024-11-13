@@ -126,7 +126,13 @@ impl Frontend for CellSim {
     // endregion
     // region: update
     fn handle_inputs(&mut self, inputs: &mut InputData) {
-        self.state.mouse = inputs.mouse;
+        self.state.mouse = inputs.mouse_pos;
+        // if inputs.mouse_pressed.state {
+        // info!("Mouse held: {inputs:#?} | {}", inputs.is_mouse_held());
+        // }
+        // if inputs.is_mouse_down() {
+        //     info!("DOWN");
+        // }
 
         assert!(
             (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
@@ -135,10 +141,10 @@ impl Frontend for CellSim {
 
         if inputs.is_mouse_held() {
             // TODO(TOM): draw indicator arrow for direction of particle.
-            self.draw_held(inputs.mouse);
+            self.draw_held(self.state.mouse);
         } else if inputs.was_mouse_pressed() {
             // TODO(TOM): Interpolation, i.e bresenhams line algorithm
-            self.draw_pressed(inputs.mouse);
+            self.draw_pressed(self.state.mouse);
         }
 
         // Toggle simulation on KeySpace

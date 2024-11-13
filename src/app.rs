@@ -2,8 +2,8 @@ use crate::{
     backend::Backend,
     frontend::Frontend,
     utils::{
-        vec2, RenderSpace, ScreenSpace, Vec2, FRAME_TIME_MS, KEY_COOLDOWN_MS, MOUSE_COOLDOWN_MS,
-        MOUSE_PRESS_THRESHOLD_MS, MS_BUFFER, SIM_MAX_SCALE,
+        vec2, RenderSpace, ScreenSpace, Vec2, FRAME_TIME_MS, KEY_COOLDOWN_MS,
+        MOUSE_HOLD_THRESHOLD_MS, MOUSE_PRESS_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
     },
 };
 use educe::Educe;
@@ -23,18 +23,24 @@ use winit::{
 #[derive(Educe, Clone, Copy)]
 #[educe(Debug)]
 pub struct MouseInput {
-    pub state: bool,
+    state: bool,
+    time: Instant,
     pub pos: Vec2<f64, ScreenSpace>,
-    pub time: Instant,
 }
 
 #[derive(Educe, Clone, Copy)]
 #[educe(Debug)]
 pub struct InputData {
-    pub mouse: Vec2<f64, ScreenSpace>,
-    pub mouse_cooldown: Instant,
-    pub mouse_pressed: MouseInput,
-    pub mouse_released: MouseInput,
+    pub mouse_pos: Vec2<f64, ScreenSpace>,
+    // this is used for holds, if mouse_down but not mouse_pressed
+    // then it is held.
+    pub mouse_down: bool,
+    // this records the press event, holding its current state, the time of press and pos of press
+    // additionally, this will operate on a cooldown, to prevent multiple presses (e.g. 3 frames << unavoidable by a human)
+    pub mouse_pressed: MouseInput, // records an event's current state, with timestamp of press
+    // this records the release event, holding its current state, the time of release and pos of release
+    // this is currently (13/11) used for the gravity_sim angry birds particle fire!
+    pub mouse_released: MouseInput, // records an event's current state, with timestamp of press
 
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
     #[educe(Debug(ignore))]
@@ -54,37 +60,46 @@ impl InputData {
     }
 
     pub fn is_mouse_held(&self) -> bool {
-        // the mouse has been pressed and held for at least MOUSE_PRESS_THRESHOLD_MS
-        self.mouse_pressed.state
-            && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+        // the mouse has been pressed and held for at least MOUSE_HOLD_THRESHOLD_MS
+        // self.mouse_pressed.state
+        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
+
+        self.mouse_down
+            && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
 
         // self.mouse_pressed.state
         //     && self.mouse_pressed.time
         //         > self
         //             .mouse_released
         //             .time
-        //             .checked_add(Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS))
+        //             .checked_add(Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS))
         //             .unwrap()
 
         // if mouse is down and has been for a bit
         // self.mouse_pressed.state
-        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
     }
 
+    pub fn is_mouse_pressed(&self) -> bool {
+        self.mouse_pressed.state
+    }
+
+    pub fn is_mouse_down(&self) -> bool {
+        self.mouse_down
+    }
+
+    // if mouse was released and time since is greater than threshold
     pub fn was_mouse_held(&self) -> bool {
         self.mouse_released.state
             && self.mouse_released.time - self.mouse_pressed.time
-                > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
-        // self.mouse_released.state
-        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+                > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
     }
 
+    // if mouse released and time since is less than threshold
     pub fn was_mouse_pressed(&self) -> bool {
         self.mouse_released.state
             && self.mouse_released.time - self.mouse_pressed.time
-                < Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
-        // self.mouse_released.state
-        //     && self.mouse_pressed.time.elapsed() < Duration::from_millis(MOUSE_PRESS_THRESHOLD_MS)
+                < Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
     }
 }
 
@@ -118,8 +133,8 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
             frontend,
             backend,
             inputs: InputData {
-                mouse: vec2(0.0, 0.0),
-                mouse_cooldown: Instant::now(),
+                mouse_pos: vec2(0.0, 0.0),
+                mouse_down: false,
                 mouse_pressed: MouseInput {
                     state: false,
                     pos: vec2(0.0, 0.0),
@@ -161,33 +176,31 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
                         ..
                     } => match *state {
                         ElementState::Pressed => {
-                            if self.inputs.mouse_cooldown.elapsed()
-                                > Duration::from_millis(MOUSE_COOLDOWN_MS)
-                            {
-                                // TODO(TOM): can only confirm that it was a mouse_press
-                                // and not a mouse_held, after n frames and it is released.
-                                // ^^ Not TRUE! can detect difference after MOUSE_PRESS_THRESHOLD_MS time
+                            // Unconditionaly set mouse_down.
+                            self.inputs.mouse_down = true;
 
+                            // Only activate a press event if sufficient time has elapsed.
+                            if self.inputs.mouse_pressed.time.elapsed()
+                                < Duration::from_millis(MOUSE_PRESS_COOLDOWN_MS)
+                            {
                                 self.inputs.mouse_pressed = MouseInput {
                                     state: true,
-                                    pos: self.inputs.mouse,
+                                    pos: self.inputs.mouse_pos,
                                     time: Instant::now(),
                                 };
-                                self.inputs.mouse_released.state = false;
-                                self.inputs.mouse_cooldown = Instant::now();
                             }
                         }
                         ElementState::Released => {
                             self.inputs.mouse_released = MouseInput {
                                 state: true,
-                                pos: self.inputs.mouse,
+                                pos: self.inputs.mouse_pos,
                                 time: Instant::now(),
                             };
-                            self.inputs.mouse_pressed.state = false;
+                            self.inputs.mouse_down = false;
                         }
                     },
                     WindowEvent::CursorMoved { position, .. } => {
-                        self.inputs.mouse = vec2(position.x, position.y);
+                        self.inputs.mouse_pos = vec2(position.x, position.y);
                     }
                     WindowEvent::Resized(physical_size) => {
                         if self.backend.window.is_minimized().unwrap() {
@@ -281,7 +294,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
     }
 
     fn clear_inputs(inputs: &mut InputData) {
-        // zero out "pressed" each frame
+        // Mouse held is bound by press,release events, these are not.
         inputs.mouse_pressed.state = false;
         inputs.mouse_released.state = false;
         inputs.keys_pressed = [false; 256];
