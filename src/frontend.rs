@@ -18,6 +18,5 @@ pub trait Frontend {
     fn resize_sim(&mut self, window_size: Vec2<u32, ScreenSpace>);
     fn rescale_sim(&mut self, scale: u32);
 
-    fn handle_inputs(&mut self, inputs: &mut InputData);
-    fn update(&mut self);
+    fn update(&mut self, inputs: &mut InputData);
 }

@@ -18,7 +18,7 @@ pub enum Material {
 impl Material {
     pub const fn get_rgb(self) -> Rgba {
         match self {
-            Self::Dead => BACKGROUND,
+            Self::Dead => DGRAY,
             Self::Alive => GREEN,
             Self::Count => panic!("Material::Count"),
         }
@@ -119,72 +119,15 @@ impl Frontend for CellSim {
             info!("Sim scale unchanged, skipping rescale. {scale:?}");
             return;
         }
-        info!("New scale: {scale:?} | {:?}", self.window_size);
+        info!("New scale: {:?} | {:?}", scale.get(), self.window_size);
         self.state.scale = scale;
         self.resize_sim(self.window_size.cast());
     }
     // endregion
     // region: update
-    fn handle_inputs(&mut self, inputs: &mut InputData) {
-        self.state.mouse = inputs.mouse_pos;
-        // if inputs.mouse_pressed.state {
-        // info!("Mouse held: {inputs:#?} | {}", inputs.is_mouse_held());
-        // }
-        // if inputs.is_mouse_down() {
-        //     info!("DOWN");
-        // }
+    fn update(&mut self, inputs: &mut InputData) {
+        self.handle_input_state(inputs);
 
-        assert!(
-            (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
-            "Mouse state error {inputs:#?}"
-        );
-
-        if inputs.is_mouse_held() {
-            // TODO(TOM): draw indicator arrow for direction of particle.
-            self.draw_held(self.state.mouse);
-        } else if inputs.was_mouse_pressed() {
-            // TODO(TOM): Interpolation, i.e bresenhams line algorithm
-            self.draw_pressed(self.state.mouse);
-        }
-
-        // Toggle simulation on KeySpace
-        if inputs.is_pressed(KeyCode::Space) {
-            self.state.running = !self.state.running;
-            info!("Sim running: {}", self.state.running);
-        }
-        self.state.step_sim = inputs.is_pressed(KeyCode::ArrowRight) && !self.state.running;
-
-        // Clear Sim on KeyC
-        if inputs.is_pressed(KeyCode::KeyC) {
-            self.clear_sim();
-        } else if inputs.is_pressed(KeyCode::KeyR) {
-            self.reset_sim();
-        }
-
-        // Branchless Draw Size Change
-        self.state.draw_size += inputs.is_pressed(KeyCode::ArrowUp) as i32;
-        self.state.draw_size -= inputs.is_pressed(KeyCode::ArrowDown) as i32;
-        self.state.draw_size = self.state.draw_size.clamp(1, MAX_DRAW_SIZE);
-
-        // Cycle shape on Tab
-        if inputs.is_pressed(KeyCode::Tab) {
-            unsafe {
-                let shape =
-                    transmute::<u8, Shape>((self.state.draw_shape as u8 + 1) % Shape::Count as u8);
-                match shape {
-                    // Shapes that are acceptable
-                    Shape::CircleOutline | Shape::CircleFill | Shape::SquareCentered => {
-                        self.state.draw_shape = shape;
-                    }
-                    _ => {
-                        self.state.draw_shape = Shape::CircleOutline;
-                    }
-                }
-            }
-        }
-    }
-
-    fn update(&mut self) {
         if self.state.running || self.state.step_sim {
             self.update_gol();
         }
@@ -309,6 +252,57 @@ impl CellSim {
 
     fn draw_released(&mut self, pressed: Vec2<f64, ScreenSpace>, released: Vec2<f64, ScreenSpace>) {
         trace!("not used.");
+    }
+    // endregion
+    // region: Input Handling
+    fn handle_input_state(&mut self, inputs: &mut InputData) {
+        self.state.mouse = inputs.mouse_pos;
+        // if inputs.mouse_pressed.state {
+        // info!("Mouse held: {inputs:#?} | {}", inputs.is_mouse_held());
+        // }
+        // if inputs.is_mouse_down() {
+        //     info!("DOWN");
+        // }
+
+        assert!(
+            (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
+            "Mouse state error {inputs:#?}"
+        );
+
+        if inputs.is_mouse_held() {
+            // TODO(TOM): draw indicator arrow for direction of particle.
+            self.draw_held(self.state.mouse);
+        } else if inputs.was_mouse_pressed() {
+            // TODO(TOM): Interpolation, i.e bresenhams line algorithm
+            self.draw_pressed(self.state.mouse);
+        }
+
+        // Toggle simulation on KeySpace
+        if inputs.is_pressed(KeyCode::Space) {
+            self.state.running = !self.state.running;
+            info!("Sim running: {}", self.state.running);
+        }
+        self.state.step_sim = inputs.is_pressed(KeyCode::ArrowRight) && !self.state.running;
+
+        // Clear Sim on KeyC
+        if inputs.is_pressed(KeyCode::KeyC) {
+            self.clear_sim();
+        } else if inputs.is_pressed(KeyCode::KeyR) {
+            self.reset_sim();
+        }
+
+        // Branchless Draw Size Change
+        self.state.draw_size += inputs.is_pressed(KeyCode::ArrowUp) as i32;
+        self.state.draw_size -= inputs.is_pressed(KeyCode::ArrowDown) as i32;
+        self.state.draw_size = self.state.draw_size.clamp(1, MAX_DRAW_SIZE);
+
+        // Cycle shape on Tab
+        if inputs.is_pressed(KeyCode::Tab) {
+            unsafe {
+                let shape = transmute::<u8, Shape>((self.state.draw_shape as u8 + 1) % 3 as u8);
+                self.state.draw_shape = shape;
+            }
+        }
     }
     // endregion
     // region: Update

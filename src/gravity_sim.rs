@@ -3,6 +3,7 @@ use crate::{
     frontend::{Frontend, SimData},
     utils::*,
 };
+use core::f64;
 use educe::Educe;
 use log::{info, trace};
 use num::pow::Pow;
@@ -10,18 +11,9 @@ use rayon::prelude::*;
 use std::{
     mem::transmute,
     ops::{Add, Div, Mul, Sub},
+    time::{Duration, Instant},
 };
 use winit::keyboard::KeyCode;
-
-/*
-    Particle Conversion in real world units:
-    - pos: pixels >> 1e4 km
-    - vel: pixels/frame >> 1e4 km/(1/TARGET_FPS) << 1000 times more than it should be (make grav const e-4 less)
-    - mass: 1e-10 kg << (make grav const less)
-    - radius: pixels >> 1e4 km
-
-    // TLDR: e-11 grav const for m, e-14 for km, e-18 for 1000km
-*/
 
 #[derive(Educe, Clone, Copy)]
 #[educe(Debug)]
@@ -59,6 +51,7 @@ pub struct GravitySim {
     sim_size: Vec2<i32, RenderSpace>,
     camera: Vec2<f64, WorldSpace>, // describes the top left of the viewport.
     camera_vel: Vec2<f64, WorldSpace>,
+
     #[educe(Debug(ignore))]
     bufs: [Vec<SyncCell<u8>>; 2],
     front_buffer: usize,
@@ -125,24 +118,125 @@ impl Frontend for GravitySim {
     }
     // endregion
     // region: Update
+    fn update(&mut self, inputs: &mut InputData) {
+        optick::event!("GravitySim::update");
 
-    fn handle_inputs(&mut self, inputs: &mut InputData) {
-        self.state.mouse = inputs.mouse_pos;
-        assert!(
-            (inputs.was_mouse_held() && inputs.was_mouse_pressed()) == false,
-            "Mouse state error {inputs:#?}"
+        self.handle_input_state(inputs);
+
+        // Clear render buffer to gray RGB(44,44,44)
+        {
+            optick::event!("Resetting texture");
+            let buf_ptr = self.bufs[self.front_buffer].as_mut_ptr();
+            unsafe {
+                // .iter.map prob gets optimized to this, but just in case.
+                buf_ptr.write_bytes(44, self.bufs[self.front_buffer].len());
+            }
+        }
+
+        if self.state.running || self.state.step_sim {
+            self.update_physics();
+        }
+
+        Self::render_particles(
+            &self.bufs[self.front_buffer],
+            &self.particles,
+            self.sim_size,
+            self.camera,
         );
-        if inputs.was_mouse_held() {
+
+        self.handle_input_renders(inputs);
+
+        if self.state.frame % TARGET_FPS as usize == 0 {
+            trace!("Particles: {}", self.particles.len());
+        }
+
+        self.prev_state = self.state;
+        self.state.step_sim = false;
+        self.state.frame += 1;
+
+        //TODO(TOM): sort out & use for multiple frames in flight.
+        // self.front_buffer = (self.front_buffer + 1) % 2;
+    }
+    // endregion
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+impl GravitySim {
+    // region: Little ones
+    fn create_particle(
+        pos: Vec2<f64, WorldSpace>,
+        vel: Vec2<f64, WorldSpace>,
+        radius: f64,
+        density: f64,
+    ) -> SyncCell<Particle> {
+        SyncCell::new(Particle {
+            pos,
+            vel,
+            mass: f64::consts::PI * 4.0 / 3.0 * radius.pow(3) * density,
+            radius,
+        })
+    }
+
+    fn spawn_particle(&mut self, pos: Vec2<f64, WorldSpace>, vel: Vec2<f64, WorldSpace>) {
+        self.particles.push(Self::create_particle(
+            pos,
+            vel,
+            f64::from(self.state.draw_size),
+            EARTH_DENSITY,
+        ));
+    }
+
+    fn init_particles() -> [SyncCell<Particle>; 2] {
+        [
+            Self::create_particle(vec2(120.0, 120.0), vec2(0.0, 0.0), SUN_RADIUS, SUN_DENSITY),
+            Self::create_particle(vec2(320.0, 320.0), vec2(0.0, 0.0), SUN_RADIUS, SUN_DENSITY),
+        ]
+    }
+
+    fn reset_sim(&mut self) {
+        self.particles.clear();
+        self.particles.extend_from_slice(&Self::init_particles());
+    }
+
+    fn clear_sim(&mut self) {
+        self.particles.clear();
+    }
+
+    fn write_colour(index: usize, buf: &[SyncCell<u8>], col: Rgba) {
+        *buf[index + 0].get_mut() = col.r;
+        *buf[index + 1].get_mut() = col.g;
+        *buf[index + 2].get_mut() = col.b;
+        *buf[index + 3].get_mut() = col.a;
+    }
+
+    fn write_to_buf(&mut self, pos: Vec2<i32, RenderSpace>, col: Rgba) {
+        let index = 4 * (pos.y * self.sim_size.x + pos.x) as usize;
+        let buf = &mut self.bufs[self.front_buffer];
+        Self::write_colour(index, buf, col);
+    }
+    // endregion
+    // region: Input Handling
+    fn handle_input_state(&mut self, inputs: &mut InputData) {
+        optick::event!("Handling Input State");
+
+        let pressed = inputs.mouse_pressed.pos;
+        let released = inputs.mouse_released.pos;
+        let mouse_pos_world = pressed.scale(self.state.scale).cast_unit().add(self.camera);
+        if inputs.was_mouse_dragging() {
             // Draws particle at initial position, give it velocity based on drag distance.
-            self.draw_released(inputs.mouse_pressed.pos, inputs.mouse_released.pos);
-        } else if inputs.is_mouse_held() {
-            // TODO(TOM): Draw indicator arrow for dragged particle, indicating velocity & direction
-            // Shape::Arrow.draw(2, |off_x: i32, off_y: i32| {
-            //     //
-            // })
+            let pressed_world = pressed.scale(self.state.scale).cast_unit().add(self.camera);
+            let game_pos_delta = pressed.sub(released).scale(self.state.scale);
+
+            // TODO(TOM): vary with current scale factor.
+            let velocity = game_pos_delta
+                .div(self.sim_size.cast())
+                .mul(MOUSE_DRAWBACK_MULTIPLIER)
+                .cast_unit();
+
+            self.spawn_particle(mouse_pos_world, velocity);
         } else if inputs.was_mouse_pressed() {
-            // Draw particle on mouse press
-            self.draw_pressed(self.state.mouse);
+            self.spawn_particle(mouse_pos_world, vec2(0.0, 0.0));
         }
 
         // Toggle simulation on KeySpace
@@ -150,10 +244,7 @@ impl Frontend for GravitySim {
             self.state.running = !self.state.running;
             info!("Sim running: {}", self.state.running);
         }
-        if inputs.is_pressed(KeyCode::ArrowRight) {
-            self.state.step_sim = true;
-        }
-        // self.state.step_sim = inputs.is_pressed(KeyCode::ArrowRight) && !self.state.running;
+        self.state.step_sim = inputs.is_pressed(KeyCode::ArrowRight);
 
         // Clear Sim on KeyC
         if inputs.is_pressed(KeyCode::KeyC) {
@@ -176,124 +267,34 @@ impl Frontend for GravitySim {
         // Cycle shape on Tab
         if inputs.is_pressed(KeyCode::Tab) {
             unsafe {
-                let shape =
-                    transmute::<u8, Shape>((self.state.draw_shape as u8 + 1) % Shape::Count as u8);
-                match shape {
-                    // Shapes that are acceptable
-                    Shape::CircleOutline | Shape::CircleFill | Shape::SquareCentered => {
-                        self.state.draw_shape = shape;
-                    }
-                    _ => {
-                        self.state.draw_shape = Shape::CircleOutline;
-                    }
-                }
+                let shape = transmute::<u8, Shape>((self.state.draw_shape as u8 + 1) % 3);
+                self.state.draw_shape = shape;
             }
         }
 
-        self.camera_vel *= CAMERA_RESISTANCE; // expand velocity til equilibrium, use easing fn?
+        // velocity is bounded by equilibrium point with resistance
+        // TODO(TOM): Change CAMERA_RESISTANCE to an easing function?
+        self.camera_vel *= CAMERA_RESISTANCE;
         self.camera += self.camera_vel;
+        self.state.mouse = inputs.mouse_pos;
     }
 
-    fn update(&mut self) {
-        optick::event!("GravitySim::update");
+    fn handle_input_renders(&mut self, inputs: &mut InputData) {
+        optick::event!("Handling Input Renders");
 
-        {
-            optick::event!("Resetting texture");
-            let buf_ptr = self.bufs[self.front_buffer].as_mut_ptr();
-            unsafe {
-                // .iter.map prob gets optimized to this, but just in case.
-                buf_ptr.write_bytes(44, self.bufs[self.front_buffer].len());
-            }
-        }
-
-        if self.state.running || self.state.step_sim {
-            self.update_physics();
-        }
-
-        Self::render_particles(
-            &self.bufs[self.front_buffer],
-            &self.particles,
-            self.sim_size,
-            self.camera,
-        );
-
-        {
-            optick::event!("Drawing Mouse Outline");
+        if inputs.is_mouse_dragging() {
+            Shape::draw_arrow(
+                inputs.mouse_pressed.pos.scale(self.state.scale).cast(),
+                inputs.mouse_pos.scale(self.state.scale).cast(),
+                |x: i32, y: i32| {
+                    let pos = vec2(x, y).clamp(vec2(0, 0), self.sim_size - 1);
+                    self.write_to_buf(pos, RED);
+                },
+            );
+        } else {
             self.clear_mouse_outline(GREEN);
             self.render_mouse_outline(GREEN);
         }
-
-        if self.state.frame % TARGET_FPS as usize == 0 {
-            trace!("Particles: {}", self.particles.len());
-        }
-
-        self.prev_state = self.state;
-        self.state.step_sim = false;
-        self.state.frame += 1;
-
-        //TODO(TOM): sort out & use for multiple frames in flight.
-        // self.front_buffer = (self.front_buffer + 1) % 2;
-    }
-    // endregion
-}
-
-impl GravitySim {
-    // region: Little ones
-    fn reset_sim(&mut self) {
-        self.particles.clear();
-        self.particles.extend_from_slice(&Self::init_particles());
-    }
-
-    fn clear_sim(&mut self) {
-        self.particles.clear();
-    }
-
-    fn init_particles() -> [SyncCell<Particle>; 2] {
-        [
-            SyncCell::new(Particle {
-                pos: vec2(120.0, 120.0),
-                vel: vec2(0.0, 0.0),
-                mass: 1.989e20,
-                radius: 69.6340,
-            }),
-            SyncCell::new(Particle {
-                pos: vec2(320.0, 320.0),
-                vel: vec2(0.0, 0.0),
-                mass: 1.989e20,
-                radius: 69.6340,
-            }),
-        ]
-    }
-    // endregion
-    // region: Drawing
-    fn draw_pressed(&mut self, pos: Vec2<f64, ScreenSpace>) {
-        let world = pos.scale(self.state.scale).cast_unit().add(self.camera);
-
-        self.particles.push(SyncCell::new(Particle {
-            pos: world,
-            vel: vec2(-0.3, 0.5),
-            mass: 5.972e14, // 14
-            radius: 6.371,
-        }));
-    }
-
-    fn draw_released(&mut self, pressed: Vec2<f64, ScreenSpace>, released: Vec2<f64, ScreenSpace>) {
-        let pressed_world = pressed.scale(self.state.scale).cast_unit().add(self.camera);
-
-        // using pressed, creates a drawback effect, like angry birds!
-        let game_pos_delta = pressed.sub(released).scale(self.state.scale);
-
-        let velocity = game_pos_delta
-            .div(self.sim_size.cast())
-            .mul(MOUSE_DRAWBACK_MULTIPLIER)
-            .cast_unit();
-
-        self.particles.push(SyncCell::new(Particle {
-            pos: pressed_world,
-            vel: velocity,
-            mass: 5.972e14, // 14
-            radius: 6.371,
-        }));
     }
     // endregion
     // region: Physics
@@ -311,17 +312,11 @@ impl GravitySim {
 
                 if abs_dist > 5.0 {
                     // If collapsing in on cursor, give it some velocity.
-                    // let normal = p
-                    //     .pos
-                    //     .sub(mouse)
-                    //     .mul(1.0 / abs_dist * PHYSICS_MULTIPLIER);
-                    let normal = (p.pos - mouse) / abs_dist * PHYSICS_MULTIPLIER;
+                    let normal = p.pos.sub(mouse).mul(1.0 / abs_dist * PHYSICS_MULTIPLIER);
                     p.vel -= normal;
                 } else {
-                    let mut delta = vec2(-1.0, -1.0);
                     // Branchless!
-                    // delta.x += 2.0 * ((p.vel.x < 0.0) as i32 as f64); // if true, -1 + 2 = 1
-                    // delta.y += 2.0 * ((p.vel.y < 0.0) as i32 as f64); // if true, -1 + 2 = 1
+                    let mut delta = vec2(-1.0, -1.0);
                     let are_vels_neg = p.vel.map(|n| (n < 0.0) as i32 as f64);
                     delta += are_vels_neg * 2.0;
                     p.vel += delta;
@@ -339,6 +334,7 @@ impl GravitySim {
             if p1.mass == 0.0 {
                 continue;
             }
+
             for (j, p2) in self.particles.iter().enumerate().skip(i) {
                 let p2 = p2.get_mut();
                 if i == j || p2.mass == 0.0 {
@@ -365,7 +361,7 @@ impl GravitySim {
 
                     // will be culled later.
                     *p2 = Particle {
-                        pos: vec2(f64::MIN, f64::MIN),
+                        pos: vec2(f64::MIN, f64::MIN), // TODO(TOM): MIN might cause slowdowns? prob not..
                         vel: vec2(0.0, 0.0),
                         mass: 0.0,
                         radius: 0.0,
@@ -376,21 +372,34 @@ impl GravitySim {
 
                     let abs_force = GRAV_CONST * (p1.mass * p2.mass) / abs_dist.pow(2.0);
 
-                    let p1_force = p1_unit_vector / abs_force;
+                    let p1_force = p1_unit_vector * abs_force;
                     let p2_force = p1_force * -1.0; // Equal and opposite!
 
-                    p1.vel += p1_force / p1.mass;
-                    p2.vel += p2_force / p2.mass;
+                    // println!(
+                    //     "{p1_unit_vector:?} = {dist:?} / {abs_dist}\n\
+                    //             {abs_force}\n\
+                    //             {p1_force:?} || {p2_force:?}\n\
+                    //             {vel:?} = {p2_force:?} / {}\n",
+                    //     p2.mass,
+                    //     vel = p2_force / p2.mass
+                    // );
+                    // TODO(TOM): dela time will break if sim looping slower than TARGET_FPS
+                    p1.vel += p1_force / p1.mass * (1.0 / TARGET_FPS); // 1.0 / TARGET_FPS == delta time
+                    p2.vel += p2_force / p2.mass * (1.0 / TARGET_FPS); // 1.0 / TARGET_FPS == delta time
                 }
             }
+
             // apply resitance & update pos after all forces have been calculated.
+
             p1.vel *= PHYSICS_RESISTANCE;
             p1.pos += p1.vel;
         }
+
         // TODO(TOM): ideally cull particles in the same loop, mutability & iterator validity issues.
         self.particles
             .retain(|p| p.get().mass != 0.0 && p.get().radius != 0.0);
     }
+
     // endregion
     // region: Rendering
     fn render_particles(
@@ -412,7 +421,7 @@ impl GravitySim {
                     || pos.y - radius >= f64::from(sim_size.y))
             })
             .for_each(|(pos, radius)| {
-                Shape::CircleOutline.draw(radius as i32, |off_x: i32, off_y: i32| {
+                Shape::CircleOutline.draw(radius as i32, |off_x, off_y| {
                     let offset = pos.map(|n| n as i32) + vec2(off_x, off_y);
                     if !(offset.x < 0
                         || offset.y < 0
@@ -420,11 +429,7 @@ impl GravitySim {
                         || offset.y >= sim_size.y)
                     {
                         let index = 4 * (offset.y * sim_size.x + offset.x) as usize;
-
-                        *texture_buf[index + 0].get_mut() = WHITE.r;
-                        *texture_buf[index + 1].get_mut() = WHITE.g;
-                        *texture_buf[index + 2].get_mut() = WHITE.b;
-                        *texture_buf[index + 3].get_mut() = WHITE.a;
+                        Self::write_colour(index, texture_buf, WHITE);
                     }
                 });
             });
@@ -442,17 +447,7 @@ impl GravitySim {
                 let mut pos = mouse.cast::<i32>() + vec2(off_x, off_y);
                 pos = pos.clamp(vec2(0, 0), self.sim_size - 1);
 
-                let index = 4 * (pos.y * self.sim_size.x + pos.x) as usize;
-                let buf = &mut self.bufs[self.front_buffer];
-                assert!(
-                    index < buf.len(),
-                    "Index: {index} | {pos:?} | {} | {self:#?}",
-                    buf.len()
-                );
-                *buf[index + 0].get_mut() = colour.r;
-                *buf[index + 1].get_mut() = colour.g;
-                *buf[index + 2].get_mut() = colour.b;
-                *buf[index + 3].get_mut() = colour.a;
+                self.write_to_buf(pos, colour);
             });
     }
 
@@ -463,7 +458,7 @@ impl GravitySim {
 
         self.prev_state
             .draw_shape
-            .draw(self.prev_state.draw_size, |off_x: i32, off_y: i32| {
+            .draw(self.prev_state.draw_size, |off_x, off_y| {
                 // avoids u32 underflow
                 let mut pos = mouse.cast::<i32>() + vec2(off_x, off_y);
                 pos = pos.clamp(vec2(0, 0), self.sim_size - 1);
@@ -475,12 +470,7 @@ impl GravitySim {
                     && *buf[index + 2].get_mut() == colour.b
                     && *buf[index + 3].get_mut() == colour.a
                 {
-                    // TODO(TOM): this is currently ok as complete re-renders are done
-                    // will have to change this if partial re-renders are implemented.
-                    *buf[index + 0].get_mut() = BACKGROUND.r;
-                    *buf[index + 1].get_mut() = BACKGROUND.g;
-                    *buf[index + 2].get_mut() = BACKGROUND.b;
-                    *buf[index + 3].get_mut() = BACKGROUND.a;
+                    Self::write_colour(index, buf, DGRAY);
                 }
             });
     }
@@ -500,8 +490,10 @@ impl GravitySim {
             buf_clone.push(SyncCell::new(44));
         }
 
-        let mut particles = Vec::with_capacity(INIT_PARTICLES);
+        let mut particles = Vec::new();
         particles.extend_from_slice(&Self::init_particles());
+
+        println!("particles: {particles:#?}");
 
         let state = State {
             frame: 0,

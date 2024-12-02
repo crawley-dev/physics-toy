@@ -3,7 +3,8 @@ use crate::{
     frontend::Frontend,
     utils::{
         vec2, RenderSpace, ScreenSpace, Vec2, FRAME_TIME_MS, KEY_COOLDOWN_MS,
-        MOUSE_HOLD_THRESHOLD_MS, MOUSE_PRESS_COOLDOWN_MS, MS_BUFFER, SIM_MAX_SCALE,
+        MOUSE_DRAG_THRESHOLD_PX, MOUSE_HOLD_THRESHOLD_MS, MOUSE_PRESS_COOLDOWN_MS, MS_BUFFER,
+        SIM_MAX_SCALE,
     },
 };
 use educe::Educe;
@@ -24,7 +25,7 @@ use winit::{
 #[educe(Debug)]
 pub struct MouseInput {
     state: bool,
-    time: Instant,
+    pub time: Instant,
     pub pos: Vec2<f64, ScreenSpace>,
 }
 
@@ -42,6 +43,7 @@ pub struct InputData {
     // this is currently (13/11) used for the gravity_sim angry birds particle fire!
     pub mouse_released: MouseInput, // records an event's current state, with timestamp of press
 
+    // TODO(TOM): should keys_held have a cooldown?
     // both fields have a tap_cooldown, however "keys_tapped is reset each frame"
     #[educe(Debug(ignore))]
     pub keys_held: [bool; 256],
@@ -59,33 +61,34 @@ impl InputData {
         self.keys_held[key as usize]
     }
 
-    pub fn is_mouse_held(&self) -> bool {
-        // the mouse has been pressed and held for at least MOUSE_HOLD_THRESHOLD_MS
-        // self.mouse_pressed.state
-        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
-
-        self.mouse_down
-            && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
-
-        // self.mouse_pressed.state
-        //     && self.mouse_pressed.time
-        //         > self
-        //             .mouse_released
-        //             .time
-        //             .checked_add(Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS))
-        //             .unwrap()
-
-        // if mouse is down and has been for a bit
-        // self.mouse_pressed.state
-        //     && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
-    }
-
     pub fn is_mouse_pressed(&self) -> bool {
         self.mouse_pressed.state
     }
 
     pub fn is_mouse_down(&self) -> bool {
         self.mouse_down
+    }
+
+    // if the mouse is down and the cursor has moved more than +/- N pixels in either direction
+    pub fn is_mouse_dragging(&self) -> bool {
+        self.mouse_down && {
+            let delta = self.mouse_pos - self.mouse_pressed.pos;
+            delta.x.abs() >= MOUSE_DRAG_THRESHOLD_PX || delta.y.abs() >= MOUSE_DRAG_THRESHOLD_PX
+        }
+    }
+
+    // if mouse is down and time since is greater than threshold.
+    // TODO(TOM): this is a quite bad, only starts emitting true after user has been clicking for 250ms or more..
+    pub fn is_mouse_held(&self) -> bool {
+        self.mouse_down
+            && self.mouse_pressed.time.elapsed() > Duration::from_millis(MOUSE_HOLD_THRESHOLD_MS)
+    }
+
+    pub fn was_mouse_dragging(&self) -> bool {
+        self.mouse_released.state && {
+            let delta = self.mouse_released.pos - self.mouse_pressed.pos;
+            delta.x.abs() >= MOUSE_DRAG_THRESHOLD_PX || delta.y.abs() >= MOUSE_DRAG_THRESHOLD_PX
+        }
     }
 
     // if mouse was released and time since is greater than threshold
@@ -181,7 +184,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
 
                             // Only activate a press event if sufficient time has elapsed.
                             if self.inputs.mouse_pressed.time.elapsed()
-                                < Duration::from_millis(MOUSE_PRESS_COOLDOWN_MS)
+                                > Duration::from_millis(MOUSE_PRESS_COOLDOWN_MS)
                             {
                                 self.inputs.mouse_pressed = MouseInput {
                                     state: true,
@@ -226,9 +229,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
                             &mut self.inputs,
                         );
 
-                        self.frontend.handle_inputs(&mut self.inputs);
-
-                        self.frontend.update();
+                        self.frontend.update(&mut self.inputs);
 
                         Self::clear_inputs(&mut self.inputs);
 

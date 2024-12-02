@@ -37,9 +37,9 @@ fn main() {
     env_logger::init();
 
     // EventLoop & window init in main func because borrowing..
-    let frontend = CellSim::new(vec2(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
+    let frontend = GravitySim::new(vec2(INIT_WIDTH, INIT_HEIGHT), INIT_SCALE);
 
-    let (event_loop, window) = App::<CellSim>::init(INIT_TITLE, vec2(INIT_WIDTH, INIT_HEIGHT));
+    let (event_loop, window) = App::<GravitySim>::init(INIT_TITLE, vec2(INIT_WIDTH, INIT_HEIGHT));
 
     let app = App::new(event_loop, &window, frontend);
 

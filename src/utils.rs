@@ -2,229 +2,74 @@
 // with each function hanging off the type or off the instance
 
 use educe::Educe;
-use num::{Num, NumCast};
+use num::{pow::Pow, Num, NumCast};
 use paste::paste;
+use rand::distributions::uniform::UniformDuration;
 use std::{
     cell::UnsafeCell,
     fmt,
     marker::PhantomData,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
+use wgpu::hal::auxil::db::intel::DEVICE_SKY_LAKE_MASK;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 // Colours (cell_sim.rs / gravity_sim.rs)
 pub const GREEN: Rgba = Rgba::from_rgb(40, 255, 40);
 pub const WHITE: Rgba = Rgba::from_rgb(255, 255, 255);
-pub const BACKGROUND: Rgba = Rgba::from_rgb(44, 44, 44);
-
-// gravity_sim.rs
-pub const MOUSE_DRAWBACK_MULTIPLIER: f64 = 20.0;
-pub const PHYSICS_MULTIPLIER: f64 = 2.0;
-pub const PHYSICS_RESISTANCE: f64 = 0.999;
-pub const INIT_PARTICLES: usize = 0;
-pub const GRAV_CONST: f64 = 6.67430e-18; // reduced by 10 for better precision?
-pub const CAMERA_RESISTANCE: f64 = 0.97;
-pub const CAMERA_SPEED: f64 = 0.1;
+pub const DGRAY: Rgba = Rgba::from_rgb(44, 44, 44);
+pub const RED: Rgba = Rgba::from_rgb(255, 40, 40);
 
 // Generic Parameters (*)
 pub const INIT_TITLE: &str = "Gravity Sim";
-pub const INIT_WIDTH: u32 = 1600 / 2;
-pub const INIT_HEIGHT: u32 = 1200 / 2;
+pub const INIT_WIDTH: u32 = 1600;
+pub const INIT_HEIGHT: u32 = 1200;
 pub const INIT_SCALE: u32 = 3;
 pub const INIT_DRAW_SIZE: i32 = 8;
 pub const SIM_MAX_SCALE: u32 = 10;
 pub const MAX_DRAW_SIZE: i32 = 500;
 
 // timing (app.rs)
-pub const MOUSE_HOLD_THRESHOLD_MS: u64 = 40;
+pub const MOUSE_HOLD_THRESHOLD_MS: u64 = 250;
 pub const MOUSE_PRESS_COOLDOWN_MS: u64 = 100;
+pub const MOUSE_DRAG_THRESHOLD_PX: f64 = 5.0; // TODO(TOM): vary with dpi
 pub const KEY_COOLDOWN_MS: u64 = 100;
-pub const TARGET_FPS: f64 = 60.0;
+pub const TARGET_FPS: f64 = 120.0;
 pub const FRAME_TIME_MS: f64 = 1000.0 / TARGET_FPS;
 pub const MS_BUFFER: f64 = 3.0;
 
+// gravity_sim.rs
+pub const MOUSE_DRAWBACK_MULTIPLIER: f64 = 10.0;
+pub const CAMERA_RESISTANCE: f64 = 0.97;
+pub const CAMERA_SPEED: f64 = 0.1;
+
+pub const PHYSICS_MULTIPLIER: f64 = 2.0;
+pub const PHYSICS_RESISTANCE: f64 = 0.999;
+pub const GRAV_CONST: f64 = 6.6743e-11 * 2e4; // made bigger (unrealistic) because gravity is tiny!
+
 /*
-macro_rules! impl_vec2_op {
-    ($name:ident, $param1:ident, $param2: ident, $op_name:ident) => {
-        paste! {
-            impl<T: Num + Copy> $name<T>{
-                pub fn [<$op_name:lower>]<T2: Num + Copy + Into<T>>(self, rhs: $name<T2>)-> Self
-                {
-                    Self {
-                        $param1: self.$param1.[<$op_name:lower>](rhs.$param1.into()),
-                        $param2: self.$param2.[<$op_name:lower>](rhs.$param2.into()),
-                    }
-                }
-                pub fn [<$op_name:lower _sep>]<T2: Num + Copy + Into<T>>(self, p1: T2, p2: T2) -> Self {
-                    Self {
-                        $param1: self.$param1.[<$op_name:lower>](p1.into()),
-                        $param2: self.$param2.[<$op_name:lower>](p2.into()),
-                    }
-                }
-                pub fn [<$op_name:lower _scalar>]<T2: Num + Copy + Into<T>>(self, scalar: T2) -> Self {
-                    Self {
-                        $param1: self.$param1.[<$op_name:lower>](scalar.into()),
-                        $param2: self.$param2.[<$op_name:lower>](scalar.into()),
-                    }
-                }
-            }
-            impl<T: Num + Copy + [<$op_name Assign>]> [<$op_name Assign>] for $name<T> {
-                fn [<$op_name:lower _assign>](&mut self, rhs: Self) {
-                    self.$param1.[<$op_name:lower _assign>](rhs.$param1);
-                    self.$param2.[<$op_name:lower _assign>](rhs.$param2);
-                }
-            }
-        }
-    };
-create_vec2!(GamePos, x, y);
-create_vec2!(WindowPos, x, y);
-create_vec2!(GameSize, width, height);
-create_vec2!(WindowSize, width, height);
-// TODO(TOM): implement .to_world() -> WorldPos for game vec2
-// region: Impl Vec2 Items
-impl<T: Num + Copy> GamePos<T> {
-    pub fn to_window(self, scale: T) -> WindowPos<T> {
-        WindowPos {
-            x: self.x * scale,
-            y: self.y * scale,
-        }
-    }
-    pub const fn to_size(self) -> GameSize<T> {
-        GameSize {
-            width: self.x,
-            height: self.y,
-        }
-    }
-}
-impl<T: Num + Copy> WindowPos<T> {
-    pub fn to_game(self, scale: T) -> GamePos<T> {
-        GamePos {
-            x: self.x / scale,
-            y: self.y / scale,
-        }
-    }
-    pub const fn to_size(self) -> WindowSize<T> {
-        WindowSize {
-            width: self.x,
-            height: self.y,
-        }
-    }
-}
-impl<T: Num + Copy> GameSize<T> {
-    pub fn to_window(self, scale: T) -> WindowSize<T> {
-        WindowSize {
-            width: self.width * scale,
-            height: self.height * scale,
-        }
-    }
+    Particle Conversion to real world units -- to not spaz float precision
+    - pos: 1.0 ==  1e4 km
+    - vel: 1.0 == 1e3km/s pixels/frame >> 1e4 km/(1/TARGET_FPS) << 1000 times more than it should be (make grav const e-4 less)
+    - mass: 1.0 == 1e20 kg
+    - radius: 1.0 == 1e4 km
 
-    pub const fn to_pos(self) -> GamePos<T> {
-        GamePos {
-            x: self.width,
-            y: self.height,
-        }
-    }
-}
-impl<T: Num + Copy> WindowSize<T> {
-    pub fn to_game(self, scale: T) -> GameSize<T> {
-        GameSize {
-            width: self.width / scale,
-            height: self.height / scale,
-        }
-    }
+    - distance: 1.0 == 1e7 m (1e4 km)
+    - mass: 1.0 == 1e20 kg
+    - velocity: 1.0 == (1e7 m) / 1.0s (calc per frame, but mult by dx to get seconds)
 
-    pub const fn to_pos(self) -> WindowPos<T> {
-        WindowPos {
-            x: self.width,
-            y: self.height,
-        }
-    }
-}
-// endregion
- */
-/*
-macro_rules! create_vec2 {
-    ($name:ident, $param1:ident, $param2: ident) => {
-        #[derive(Educe, Clone, Copy, PartialEq, Eq)]
-        #[educe(Debug(named_field = false))]
-        pub struct $name<T: Copy> {
-            pub $param1: T,
-            pub $param2: T,
-        }
-        impl<T: Num + Copy + ToPrimitive> $name<T> {
-            pub fn clamp(self, min: $name<T>, max: $name<T>) -> Self
-            where
-                T: PartialOrd,
-            {
-                Self {
-                    $param1: num::clamp(self.$param1, min.$param1, max.$param1),
-                    $param2: num::clamp(self.$param2, min.$param2, max.$param2),
-                }
-            }
-
-            pub fn into<T2: Num + Copy + From<T>>(self) -> $name<T2> {
-                $name {
-                    $param1: self.$param1.into(),
-                    $param2: self.$param2.into(),
-                }
-            }
-
-            pub fn map<T2: Num + Copy, F: Fn(T) -> T2>(self, f: F) -> $name<T2> {
-                $name {
-                    $param1: f(self.$param1),
-                    $param2: f(self.$param2),
-                }
-            }
-        }
-
-        impl_vec2_op!($name, $param1, $param2, Add);
-        impl_vec2_op!($name, $param1, $param2, Sub);
-        impl_vec2_op!($name, $param1, $param2, Mul);
-        impl_vec2_op!($name, $param1, $param2, Div);
-        // region: From Implementations
-        impl<T: Num + Copy> From<(T, T)> for $name<T> {
-            fn from((a, b): (T, T)) -> Self {
-                Self {
-                    $param1: a,
-                    $param2: b,
-                }
-            }
-        }
-        impl<T: Num + Copy> From<PhysicalSize<T>> for $name<T> {
-            fn from(size: PhysicalSize<T>) -> Self {
-                Self {
-                    $param1: size.width,
-                    $param2: size.height,
-                }
-            }
-        }
-        impl<T: Num + Copy> From<PhysicalPosition<T>> for $name<T> {
-            fn from(pos: PhysicalPosition<T>) -> Self {
-                Self {
-                    $param1: pos.x,
-                    $param2: pos.y,
-                }
-            }
-        }
-        impl<T: Num + Copy> From<$name<T>> for PhysicalSize<T> {
-            fn from(size: $name<T>) -> Self {
-                Self {
-                    width: size.$param1,
-                    height: size.$param2,
-                }
-            }
-        }
-        impl<T: Num + Copy> From<$name<T>> for PhysicalPosition<T> {
-            fn from(pos: $name<T>) -> Self {
-                Self {
-                    x: pos.$param1,
-                    y: pos.$param2,
-                }
-            }
-        }
-    };
-}
+    // TLDR: e-11 grav const for m, e-14 for km, e-18 for 1000km
 */
+
+pub const DISTANCE_SCALE: f64 = 1e-7;
+pub const MASS_SCALE: f64 = 1e-20;
+// pub const VELOCITY_SCALE: f64 = 1e3;
+pub const DENSITY_SCALE: f64 = MASS_SCALE / (DISTANCE_SCALE * DISTANCE_SCALE * DISTANCE_SCALE);
+
+pub const SUN_DENSITY: f64 = 1403.0 * DENSITY_SCALE; // kg/m3 --> val * 1e-20 * (1e7)^3
+pub const EARTH_DENSITY: f64 = 5514.0 * DENSITY_SCALE;
+pub const SUN_RADIUS: f64 = 696_340_000.0 * DISTANCE_SCALE; //69.634;
+pub const EARTH_RADIUS: f64 = 6_378_000.0 * DISTANCE_SCALE; //6.371;
 
 // region: Vec2
 pub trait CoordSpace {}
@@ -238,8 +83,9 @@ macro_rules! create_coordinate_space {
 create_coordinate_space!(ScreenSpace);
 create_coordinate_space!(RenderSpace);
 create_coordinate_space!(WorldSpace);
+create_coordinate_space!(Unknown);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Scale<T: Num + Copy + Mul, Src: CoordSpace, Dst: CoordSpace>(T, PhantomData<(Src, Dst)>);
 impl<T: Num + Copy + Mul, Src: CoordSpace, Dst: CoordSpace> Scale<T, Src, Dst> {
     pub fn new(val: T) -> Self {
@@ -250,16 +96,33 @@ impl<T: Num + Copy + Mul, Src: CoordSpace, Dst: CoordSpace> Scale<T, Src, Dst> {
         self.0
     }
 }
+impl<T: fmt::Display + Num + Copy + Mul, Src: CoordSpace, Dst: CoordSpace> fmt::Debug
+    for Scale<T, Src, Dst>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Scale({}, ({} -> {}))",
+            self.0,
+            std::any::type_name::<Src>(),
+            std::any::type_name::<Dst>()
+        )
+    }
+}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Vec2<T, U: CoordSpace> {
+#[derive(Educe, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[educe(Debug)]
+pub struct Vec2<T: fmt::Debug, U: CoordSpace> {
+    #[educe(Debug(method("fmt_limited_precision")))]
     pub x: T,
+    #[educe(Debug(method("fmt_limited_precision")))]
     pub y: T,
+    #[educe(Debug(ignore))]
     _unit: PhantomData<U>,
 }
 
 #[inline]
-pub fn vec2<T, U: CoordSpace>(p1: T, p2: T) -> Vec2<T, U> {
+pub fn vec2<T: fmt::Debug, U: CoordSpace>(p1: T, p2: T) -> Vec2<T, U> {
     Vec2 {
         x: p1,
         y: p2,
@@ -267,7 +130,7 @@ pub fn vec2<T, U: CoordSpace>(p1: T, p2: T) -> Vec2<T, U> {
     }
 }
 
-impl<T: Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
+impl<T: fmt::Debug + Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
     pub fn clamp(self, min: Vec2<T, U>, max: Vec2<T, U>) -> Vec2<T, U>
     where
         T: PartialOrd,
@@ -279,7 +142,7 @@ impl<T: Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
         }
     }
 
-    pub fn map<T2, F: Fn(T) -> T2>(self, f: F) -> Vec2<T2, U> {
+    pub fn map<T2: fmt::Debug, F: Fn(T) -> T2>(self, f: F) -> Vec2<T2, U> {
         Vec2 {
             x: f(self.x),
             y: f(self.y),
@@ -287,7 +150,8 @@ impl<T: Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
         }
     }
 
-    pub fn cast<DstT: NumCast>(self) -> Vec2<DstT, U> {
+    /// Casts the values of the vector to another type, e.g. f64 -> i32
+    pub fn cast<DstT: fmt::Debug + NumCast>(self) -> Vec2<DstT, U> {
         Vec2 {
             x: DstT::from(self.x).unwrap(),
             y: DstT::from(self.y).unwrap(),
@@ -295,6 +159,8 @@ impl<T: Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
         }
     }
 
+    /// Force transforms one unit to another, this function should be used carefully,
+    /// As it does not scale the values, it just changes the unit type.
     pub fn cast_unit<DstU: CoordSpace>(self) -> Vec2<T, DstU> {
         Vec2 {
             x: self.x,
@@ -325,7 +191,7 @@ impl<T: Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
 macro_rules! impl_vec2_op {
     ($op_name:ident) => {
         paste! {
-            impl<T: $op_name<Output = T> + Copy, U: CoordSpace> $op_name for Vec2<T,U> {
+            impl<T: fmt::Debug + $op_name<Output = T> + Copy, U: CoordSpace> $op_name for Vec2<T,U> {
                 type Output = Vec2<T, U>;
                 fn [<$op_name:lower>](self, rhs: Self) -> Self::Output {
                     Vec2 {
@@ -335,7 +201,7 @@ macro_rules! impl_vec2_op {
                     }
                 }
             }
-            impl<T: $op_name<Output = T> + Copy, U: CoordSpace> $op_name<T> for Vec2<T,U> {
+            impl<T: fmt::Debug + $op_name<Output = T> + Copy, U: CoordSpace> $op_name<T> for Vec2<T,U> {
                 type Output = Vec2<T, U>;
                 fn [<$op_name:lower>](self, rhs: T) -> Self::Output {
                     Vec2 {
@@ -345,13 +211,13 @@ macro_rules! impl_vec2_op {
                     }
                 }
             }
-            impl<T: [<$op_name Assign>] + Copy, U: CoordSpace> [<$op_name Assign>] for Vec2<T, U> {
+            impl<T: fmt::Debug + [<$op_name Assign>] + Copy, U: CoordSpace> [<$op_name Assign>] for Vec2<T, U> {
                 fn [<$op_name:lower _assign>](&mut self, rhs: Vec2<T, U>) {
                     self.x.[<$op_name:lower _assign>](rhs.x);
                     self.y.[<$op_name:lower _assign>](rhs.y);
                 }
             }
-            impl<T: [<$op_name Assign>] + Copy, U: CoordSpace> [<$op_name Assign>]<T> for Vec2<T, U> {
+            impl<T: fmt::Debug + [<$op_name Assign>] + Copy, U: CoordSpace> [<$op_name Assign>]<T> for Vec2<T, U> {
                 fn [<$op_name:lower _assign>](&mut self, rhs: T) {
                     self.x.[<$op_name:lower _assign>](rhs);
                     self.y.[<$op_name:lower _assign>](rhs);
@@ -374,13 +240,12 @@ pub enum Shape {
     CircleOutline,
     CircleFill,
     SquareCentered,
-    Line,
-    Arrow,
-    Count,
 }
 
 impl Shape {
-    pub fn draw<F: FnMut(i32, i32)>(self, size: i32, mut lambda: F) {
+    // Provides Offsets relative to be used with a a presumed central point of origin.
+    // The lambda captures the offsets, combines with the central point and does stuff with the data (drawing).
+    pub fn draw(self, size: i32, mut lambda: impl FnMut(i32, i32)) {
         match self {
             Self::CircleOutline => {
                 let mut x = 0;
@@ -443,19 +308,76 @@ impl Shape {
                     }
                 }
             }
-            Self::Line => {
-                // line
-                todo!("line algo")
+        }
+    }
+
+    // Bresenham's Line Algorithm
+    pub fn draw_line<T: CoordSpace>(
+        mut start: Vec2<i32, T>,
+        mut end: Vec2<i32, T>,
+        mut plot: &mut impl FnMut(i32, i32),
+    ) {
+        let dx = (end.x - start.x).abs();
+        let sx = if start.x < end.x { 1 } else { -1 };
+        let dy = -(end.y - start.y).abs();
+        let sy = if start.y < end.y { 1 } else { -1 };
+
+        // crazy branchless code
+        // let sx = -1 + ((start.x < end.x) as i32 * 2);
+        // let sy = -1 + ((start.y < end.y) as i32 * 2);
+
+        let mut error = dx + dy;
+
+        loop {
+            plot(start.x, start.y);
+            if start.x == end.x && start.y == end.y {
+                break;
             }
-            Self::Arrow => {
-                // bresenham's line algorithm. point => len
-                // line either side of mouse cursor (arrow-ness)
-                todo!("arrow algo")
+            let e2 = 2 * error;
+            if e2 >= dy {
+                error += dy;
+                start.x += sx;
             }
-            Self::Count => {
-                panic!("Shape::Count is not a valid shape");
+            if e2 <= dx {
+                error += dx;
+                start.y += sy;
             }
         }
+    }
+
+    pub fn draw_arrow<T: CoordSpace + Copy>(
+        start: Vec2<i32, T>,
+        end: Vec2<i32, T>,
+        mut plot: impl FnMut(i32, i32),
+    ) {
+        // Draw arrow body
+        Self::draw_line(start, end, &mut plot);
+
+        /*
+                                ARROW_RIGHT
+
+                        End
+
+            ARROW_LEFT          Start
+        */
+
+        // const SCALE: f64 = 0.1;
+        // Self::draw_line(
+        //     start,
+        //     vec2(
+        //         start.x + (end.x as f64 * SCALE) as i32,
+        //         start.y - (end.y as f64 * SCALE) as i32,
+        //     ),
+        //     &mut plot,
+        // );
+        // Self::draw_line(
+        //     start,
+        //     vec2(
+        //         start.x - (end.x as f64 * SCALE) as i32,
+        //         start.y + (end.y as f64 * SCALE) as i32,
+        //     ),
+        //     &mut plot,
+        // );
     }
 }
 // endregion
@@ -467,6 +389,7 @@ pub struct Rgba {
     pub b: u8,
     pub a: u8,
 }
+
 #[allow(dead_code)] // maybe one day I will use this
 impl Rgba {
     pub const fn as_u32(self) -> u32 {
