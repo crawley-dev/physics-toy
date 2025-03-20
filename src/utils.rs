@@ -45,7 +45,7 @@ pub const CAMERA_SPEED: f64 = 0.1;
 
 pub const SMALL_VALUE: f64 = 1e-6;
 pub const COLLISION_RESTITUTION: f64 = 0.8;
-pub const PHYSICS_MULTIPLIER: f64 = 4e-11;
+pub const PHYSICS_MULTIPLIER: f64 = 1e-10;
 pub const PHYSICS_RESISTANCE: f64 = 0.999;
 
 // SIM CONSTANTS

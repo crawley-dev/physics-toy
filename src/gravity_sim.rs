@@ -425,7 +425,7 @@ impl Simulation {
             p1.vel *= PHYSICS_RESISTANCE;
             p1.pos += p1.vel;
 
-            // println!("{i}: {p1:#?}");
+            p1.force = vec2(0.0, 0.0);
         }
 
         // TODO(TOM): ideally cull particles in the same loop, mutability & iterator validity issues.
@@ -533,6 +533,8 @@ impl Particle {
         dist: Vec2<f64, WorldSpace>,
         abs_dist_squared: f64,
     ) {
+        // TO FUTURE TOM: look into merging particles, base it in momentum transfer.
+
         // Rebound Particles
         if abs_dist_squared < SMALL_VALUE {
             self.pos += self.radius * 0.25;
@@ -560,31 +562,35 @@ impl Particle {
             let impulse_scalar =
                 -(1.0 * COLLISION_RESTITUTION) * velocity_along_normal / normalised_combined_mass;
 
-            // println!(
-            //     "impulse_scalar: {}, normalised_combined_mass: {}",
-            //     impulse_scalar, normalised_combined_mass
-            // );
-
-            // let relative_force = velocity_delta.x.abs() / (self.mass + p2.mass)
-            // + velocity_delta.y.abs() / (self.mass + p2.mass);
-            // println!("Relative Force: {}", relative_force);
-            // if velocity_delta / (self.mass + p2.mass) > 0.1 {
-            //     self.combine_particles(p2);
-            //     return;
-            // }
-
             // Apply rebound impulse to particles.
             self.vel -= (normal / self.mass) * impulse_scalar;
             p2.vel -= (normal / p2.mass) * impulse_scalar;
 
-            // position correction to prevent sinking back into each other
-            let correction = (min_dist - abs_dist) * 4.0;
-            let correction_ratio_p1 = correction / self.mass / normalised_combined_mass;
-            let correction_ratio_p2 = correction / p2.mass / normalised_combined_mass;
+            let min_distance = self.radius + p2.radius;
+            let overlap = min_distance - abs_dist;
+            // let separation_dist = overlap + min_distance * 0.5;
 
             // move particles away from each other (proportional to their mass)
-            self.pos -= normal * correction_ratio_p1;
-            p2.pos += normal * correction_ratio_p2;
+            // self.pos -= normal * separation_dist * (p2.mass / (self.mass + p2.mass));
+            // p2.pos += normal * separation_dist * (self.mass / (self.mass + p2.mass));
+
+            // Now relate position correction to impulse magnitude
+            // Basic separation to resolve overlap
+            let base_separation = overlap * 1.1; // 10% extra to prevent immediate re-collision
+
+            // Additional separation based on impulse magnitude
+            // Scale factor depends on your simulation values
+            let impulse_scale = 0.01; // Adjust based on testing
+            let impulse_separation = impulse_scalar.abs() * impulse_scale;
+
+            // Combine with a reasonable maximum to prevent extreme separations
+            let max_separation = min_distance * 0.5; // Max 50% of combined radii
+            let total_separation = (base_separation + impulse_separation).min(max_separation);
+
+            // Apply position correction based on mass
+            let total_mass = self.mass + p2.mass;
+            let i_correction = total_separation * (p2.mass / total_mass);
+            let j_correction = total_separation * (self.mass / total_mass);
         }
     }
 
@@ -604,7 +610,7 @@ impl Particle {
         let unit_vector = dist / abs_dist;
         let abs_force = (GRAV_CONST * PHYSICS_MULTIPLIER * self.mass * p2.mass) / abs_dist.pow(2.0);
 
-        let force = unit_vector * abs_force; // * delta_time;
+        let force = unit_vector * abs_force;
 
         self.force += force;
         p2.force -= force;
