@@ -430,8 +430,8 @@ impl Simulation {
 
         // TODO(TOM): ideally cull particles in the same loop, mutability & iterator validity issues.
         // if COMBINE_PARTICLES_IS_ACTIVE {
-        // self.particles
-        //         .retain(|p| p.get().mass != 0.0 && p.get().radius != 0.0);
+        self.particles
+            .retain(|p| p.get().mass != 0.0 && p.get().radius != 0.0);
         // }
     }
 
@@ -527,22 +527,22 @@ impl Particle {
         };
     }
 
-    fn collide_particles(
+    fn handle_collision(
         &mut self,
         p2: &mut Particle,
         dist: Vec2<f64, WorldSpace>,
         abs_dist_squared: f64,
     ) {
-        println!("colliding!");
-        // if too close, add a small amount to avoid division by zero.
+        // Rebound Particles
         if abs_dist_squared < SMALL_VALUE {
-            self.pos += SMALL_VALUE;
-            p2.pos += SMALL_VALUE;
+            self.pos += self.radius * 0.25;
+            p2.pos += p2.radius * 0.25;
             return;
         }
 
-        let abs_dist = f64::sqrt(abs_dist_squared);
+        let mut should_merge = false;
 
+        let abs_dist = f64::sqrt(abs_dist_squared);
         let min_dist = self.radius + p2.radius;
 
         // normal vector from p1 to p2
@@ -554,17 +554,31 @@ impl Particle {
         // project relative velocity (velocity_delta) along normal vector
         let velocity_along_normal = velocity_delta.x * normal.x + velocity_delta.y * normal.y;
 
+        // only rebound if they are moving towards each other. ?
         if velocity_along_normal < 0.0 {
             let normalised_combined_mass = 1.0 / self.mass + 1.0 / p2.mass;
             let impulse_scalar =
                 -(1.0 * COLLISION_RESTITUTION) * velocity_along_normal / normalised_combined_mass;
+
+            // println!(
+            //     "impulse_scalar: {}, normalised_combined_mass: {}",
+            //     impulse_scalar, normalised_combined_mass
+            // );
+
+            // let relative_force = velocity_delta.x.abs() / (self.mass + p2.mass)
+            // + velocity_delta.y.abs() / (self.mass + p2.mass);
+            // println!("Relative Force: {}", relative_force);
+            // if velocity_delta / (self.mass + p2.mass) > 0.1 {
+            //     self.combine_particles(p2);
+            //     return;
+            // }
 
             // Apply rebound impulse to particles.
             self.vel -= (normal / self.mass) * impulse_scalar;
             p2.vel -= (normal / p2.mass) * impulse_scalar;
 
             // position correction to prevent sinking back into each other
-            let correction = (min_dist - abs_dist) * 0.5;
+            let correction = (min_dist - abs_dist) * 4.0;
             let correction_ratio_p1 = correction / self.mass / normalised_combined_mass;
             let correction_ratio_p2 = correction / p2.mass / normalised_combined_mass;
 
@@ -572,25 +586,6 @@ impl Particle {
             self.pos -= normal * correction_ratio_p1;
             p2.pos += normal * correction_ratio_p2;
         }
-    }
-
-    fn gravitate(&mut self, p2: &mut Particle, dist: Vec2<f64, WorldSpace>, abs_dist: f64) {
-        let unit_vector = dist / abs_dist;
-        let abs_force = (GRAV_CONST * PHYSICS_MULTIPLIER * self.mass * p2.mass) / abs_dist.pow(2.0);
-
-        let force = unit_vector * abs_force; // * delta_time;
-
-        // trace!(
-        //     "unit vector: {unit_vector:?} = {dist:?} / {abs_dist}\n\
-        //             abs_force: {abs_force}\n\
-        //             force: {force:#?}\n\
-        //             vel: {vel:#?} = {force:#?} / {:#?}\n",
-        //     p2.mass,
-        //     vel = force / p2.mass
-        // );
-
-        self.force += force;
-        p2.force -= force;
     }
 
     fn apply_physics(&mut self, p2: &mut Particle) {
@@ -601,11 +596,18 @@ impl Particle {
         let collision_occurred = abs_dist_squared < min_distance.pow(2);
 
         if collision_occurred {
-            // self.combine_particles(p2);
-            self.collide_particles(p2, dist, abs_dist_squared);
-        } else {
-            self.gravitate(p2, dist, f64::sqrt(abs_dist_squared));
+            self.handle_collision(p2, dist, abs_dist_squared);
+            return;
         }
+
+        let abs_dist = f64::sqrt(abs_dist_squared);
+        let unit_vector = dist / abs_dist;
+        let abs_force = (GRAV_CONST * PHYSICS_MULTIPLIER * self.mass * p2.mass) / abs_dist.pow(2.0);
+
+        let force = unit_vector * abs_force; // * delta_time;
+
+        self.force += force;
+        p2.force -= force;
     }
 }
 
