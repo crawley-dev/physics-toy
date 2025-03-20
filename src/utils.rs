@@ -43,9 +43,18 @@ pub const MOUSE_DRAWBACK_MULTIPLIER: f64 = 10.0;
 pub const CAMERA_RESISTANCE: f64 = 0.97;
 pub const CAMERA_SPEED: f64 = 0.1;
 
-pub const PHYSICS_MULTIPLIER: f64 = 2.0;
+pub const SMALL_VALUE: f64 = 1e-6;
+pub const COLLISION_RESTITUTION: f64 = 0.8;
+pub const PHYSICS_MULTIPLIER: f64 = 1e-12;
 pub const PHYSICS_RESISTANCE: f64 = 0.999;
-pub const GRAV_CONST: f64 = 6.6743e-11 * 2e4; // made bigger (unrealistic) because gravity is tiny!
+
+// SIM CONSTANTS
+pub const DISTANCE_SCALE: f64 = 1.1970456e+15; // pixel to meters conversion scale. (not logarithmic!)
+
+pub const GRAV_CONST: f64 = 6.6743e-11;
+pub const EARTH_MASS: f64 = 5.972e24;
+pub const EARTH_DENSITY: f64 = 5514.0 * DISTANCE_SCALE;
+pub const SUN_MASS: f64 = 1.989e30;
 
 /*
     Particle Conversion to real world units -- to not spaz float precision
@@ -61,15 +70,20 @@ pub const GRAV_CONST: f64 = 6.6743e-11 * 2e4; // made bigger (unrealistic) becau
     // TLDR: e-11 grav const for m, e-14 for km, e-18 for 1000km
 */
 
-pub const DISTANCE_SCALE: f64 = 1e-7;
-pub const MASS_SCALE: f64 = 1e-20;
-// pub const VELOCITY_SCALE: f64 = 1e3;
-pub const DENSITY_SCALE: f64 = MASS_SCALE / (DISTANCE_SCALE * DISTANCE_SCALE * DISTANCE_SCALE);
+// pub const DISTANCE_SCALE: f64 = 1e-7;
+// pub const MASS_SCALE: f64 = 1e-20;
+// // pub const VELOCITY_SCALE: f64 = 1e3;
+// pub const DENSITY_SCALE: f64 = MASS_SCALE / (DISTANCE_SCALE * DISTANCE_SCALE * DISTANCE_SCALE);
 
-pub const SUN_DENSITY: f64 = 1403.0 * DENSITY_SCALE; // kg/m3 --> val * 1e-20 * (1e7)^3
-pub const EARTH_DENSITY: f64 = 5514.0 * DENSITY_SCALE;
-pub const SUN_RADIUS: f64 = 696_340_000.0 * DISTANCE_SCALE; //69.634;
-pub const EARTH_RADIUS: f64 = 6_378_000.0 * DISTANCE_SCALE; //6.371;
+// pub const SUN_DENSITY: f64 = 1403.0 * DENSITY_SCALE; // kg/m3 --> val * 1e-20 * (1e7)^3
+// * DENSITY_SCALE;
+// pub const SUN_RADIUS: f64 = 696_340_000.0 * DISTANCE_SCALE; //69.634;
+// pub const EARTH_RADIUS: f64 = 6_378_000.0 * DISTANCE_SCALE; //6.371;
+
+// pub const SUN_DENSITY: f64 = 1403.0; // kg/m3 --> val * 1e-20 * (1e7)^3
+// pub const EARTH_DENSITY: f64 = 5514.0;
+// pub const SUN_RADIUS: f64 = 696_340_000.0; //69.634;
+// pub const EARTH_RADIUS: f64 = 6_378_000.0; //6.371;
 
 // region: Vec2
 pub trait CoordSpace {}
@@ -80,9 +94,10 @@ macro_rules! create_coordinate_space {
         impl CoordSpace for $name {}
     };
 }
-create_coordinate_space!(ScreenSpace);
-create_coordinate_space!(RenderSpace);
-create_coordinate_space!(WorldSpace);
+
+create_coordinate_space!(ScreenSpace); // Space of the window e.g. 720x480
+create_coordinate_space!(RenderSpace); // Space of the simulation e.g. 360x240
+create_coordinate_space!(WorldSpace); // Space of the world, any number, could be offscreen!
 create_coordinate_space!(Unknown);
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -412,8 +427,9 @@ impl Rgba {
             a: (colour & 0xFF) as u8,
         }
     }
-} // endregion
-
+}
+// endregion
+// region: SyncCell
 // This is a simple wrapper on UnsafeCell for parallelism. (impl Sync)
 // UnsafeCell is an unsafe primitive for interior mutability (bypassing borrow checker)
 // UnsafeCell provides no thread safety gurantees, I don't care though so I made this wrapper
@@ -449,3 +465,4 @@ impl<T: Clone> Clone for SyncCell<T> {
 pub fn fmt_limited_precision<T: fmt::Debug>(x: T, format: &mut fmt::Formatter) -> fmt::Result {
     write!(format, "{x:.2?}") // Specify precision here
 }
+// endregion

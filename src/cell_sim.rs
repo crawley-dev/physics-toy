@@ -1,4 +1,4 @@
-use std::mem::transmute;
+use std::{mem::transmute, time::Duration};
 
 use crate::{
     app::InputData,
@@ -125,7 +125,7 @@ impl Frontend for CellSim {
     }
     // endregion
     // region: update
-    fn update(&mut self, inputs: &mut InputData) {
+    fn update(&mut self, inputs: &mut InputData, _avg_frame_time: Duration) {
         self.handle_input_state(inputs);
 
         if self.state.running || self.state.step_sim {

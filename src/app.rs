@@ -4,7 +4,7 @@ use crate::{
     utils::{
         vec2, RenderSpace, ScreenSpace, Vec2, FRAME_TIME_MS, KEY_COOLDOWN_MS,
         MOUSE_DRAG_THRESHOLD_PX, MOUSE_HOLD_THRESHOLD_MS, MOUSE_PRESS_COOLDOWN_MS, MS_BUFFER,
-        SIM_MAX_SCALE,
+        SIM_MAX_SCALE, TARGET_FPS,
     },
 };
 use educe::Educe;
@@ -156,10 +156,11 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
     }
 
     // NOTE(TOM): use matches! macro more , its INCREDIBLE
-
     pub fn run(mut self) {
         let start = Instant::now();
         let mut frame_timer = start;
+        let mut avg_frame_time = Duration::from_millis(FRAME_TIME_MS as u64);
+
         self.event_loop
             .run(move |event, control_flow| match event {
                 Event::AboutToWait => {
@@ -229,14 +230,14 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
                             &mut self.inputs,
                         );
 
-                        self.frontend.update(&mut self.inputs);
+                        self.frontend.update(&mut self.inputs, avg_frame_time);
 
                         Self::clear_inputs(&mut self.inputs);
 
                         let sim_data = self.frontend.get_sim_data();
                         self.backend.render(&sim_data, start);
 
-                        Self::timing(sim_data.frame, start, &mut frame_timer);
+                        let avg_frame_time = Self::timing(sim_data.frame, start, &mut frame_timer);
                     }
                     _ => {}
                 },
@@ -302,18 +303,16 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
     }
 
     // TODO(TOM): instead of sleeping, have multiple frames in flight, prob max 2 (front & back buffer)
-    fn timing(frame: usize, start: Instant, frame_timer: &mut Instant) {
+    fn timing(frame: usize, start: Instant, frame_timer: &mut Instant) -> Duration {
         optick::event!("App::timing");
 
         let elapsed = frame_timer.elapsed();
         let remaining_frame_time = (FRAME_TIME_MS - elapsed.as_millis_f64()).max(0.0);
+        let avg_frame_time = start.elapsed() / frame as u32;
 
         // avg frametime
-        if frame % 60 == 0 {
-            trace!(
-                "Frametime: {elapsed:.2?} | Avg Frametime: {:.2?}",
-                start.elapsed() / frame as u32
-            );
+        if frame % TARGET_FPS as usize == 0 {
+            trace!("Frametime: {elapsed:.2?} | Avg Frametime: {avg_frame_time:.2?}",);
         }
 
         if remaining_frame_time > MS_BUFFER {
@@ -321,5 +320,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
             std::thread::sleep(Duration::from_millis(with_buffer as u64));
         }
         *frame_timer = Instant::now();
+
+        return avg_frame_time;
     }
 }

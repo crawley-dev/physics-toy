@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::{app::InputData, utils::*};
 use educe::Educe;
 
@@ -18,5 +20,5 @@ pub trait Frontend {
     fn resize_sim(&mut self, window_size: Vec2<u32, ScreenSpace>);
     fn rescale_sim(&mut self, scale: u32);
 
-    fn update(&mut self, inputs: &mut InputData);
+    fn update(&mut self, inputs: &mut InputData, avg_frame_time: Duration);
 }

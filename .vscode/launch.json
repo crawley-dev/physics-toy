@@ -8,7 +8,17 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug",
-            "program": "${workspaceFolder}/<executable file>",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=toy_physics",
+                    "--package=toy_physics" 
+                ],
+                "filter": {
+                    "name": "toy_physics",
+                    "kind": "bin"   
+                }
+            },
             "args": [],
             "cwd": "${workspaceFolder}"
         }
