@@ -224,7 +224,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
 
                         optick::next_frame();
 
-                        Self::handle_inputs(
+                        Self::handle_window_inputs(
                             &mut self.frontend,
                             &mut self.backend,
                             &mut self.inputs,
@@ -282,7 +282,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
     }
 
     // Unified input handling for tasks that involve both frontend and backend (e.g resize)
-    fn handle_inputs(frontend: &mut F, backend: &mut Backend<'_>, inputs: &mut InputData) {
+    fn handle_window_inputs(frontend: &mut F, backend: &mut Backend<'_>, inputs: &mut InputData) {
         optick::event!("App::handle_inputs");
 
         // Scale factor on KeyPlus and KeyMinus

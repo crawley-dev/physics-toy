@@ -188,6 +188,7 @@ impl GravitySim {
         }
     }
     // endregion
+    // TODO(TOM): re-write this to occur outside the game loop (restricted to 60/120fps)
     // region: Input Handling
     fn handle_input_state(&mut self, inputs: &mut InputData) {
         optick::event!("Handling Input State");
