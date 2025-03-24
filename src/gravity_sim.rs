@@ -190,6 +190,7 @@ impl GravitySim {
     fn handle_input_state(&mut self, inputs: &mut InputData) {
         optick::event!("Handling Input State");
 
+        let shift_modifier = inputs.is_held(KeyCode::ShiftLeft) as i32;
         let pressed = inputs.mouse_pressed.pos;
         let released = inputs.mouse_released.pos;
         let mouse_pos_world = pressed.scale(self.state.scale).cast_unit().add(self.camera);
@@ -240,8 +241,10 @@ impl GravitySim {
         self.camera_vel.x -= CAMERA_SPEED * inputs.is_held(KeyCode::KeyA) as i32 as f64;
 
         // Branchless Draw Size Change
-        self.state.draw_size += inputs.is_pressed(KeyCode::ArrowUp) as i32;
-        self.state.draw_size -= inputs.is_pressed(KeyCode::ArrowDown) as i32;
+        self.state.draw_size +=
+            inputs.is_pressed(KeyCode::ArrowUp) as i32 * (1 + (shift_modifier * 5));
+        self.state.draw_size -=
+            inputs.is_pressed(KeyCode::ArrowDown) as i32 * (1 + (shift_modifier * 5));
         self.state.draw_size = self.state.draw_size.clamp(1, MAX_DRAW_SIZE);
 
         // Cycle shape on Tab
@@ -426,13 +429,13 @@ impl Simulation {
             p1.pos += p1.vel;
 
             p1.force = vec2(0.0, 0.0);
+
+            // println!("{p1:#?}");
         }
 
         // TODO(TOM): ideally cull particles in the same loop, mutability & iterator validity issues.
-        // if COMBINE_PARTICLES_IS_ACTIVE {
         self.particles
             .retain(|p| p.get().mass != 0.0 && p.get().radius != 0.0);
-        // }
     }
 
     /*
@@ -526,29 +529,24 @@ impl Particle {
             radius: 0.0,
         };
     }
-
     fn handle_collision(
         &mut self,
         p2: &mut Particle,
-        dist: Vec2<f64, WorldSpace>,
-        abs_dist_squared: f64,
+        abs_dist: f64,
+        normal: Vec2<f64, WorldSpace>,
     ) {
         // TO FUTURE TOM: look into merging particles, base it in momentum transfer.
 
         // Rebound Particles
-        if abs_dist_squared < SMALL_VALUE {
+        if abs_dist < SMALL_VALUE {
             self.pos += self.radius * 0.25;
             p2.pos += p2.radius * 0.25;
             return;
         }
 
-        let mut should_merge = false;
-
-        let abs_dist = f64::sqrt(abs_dist_squared);
         let min_dist = self.radius + p2.radius;
 
-        // normal vector from p1 to p2
-        let normal = dist / abs_dist;
+        let overlap = min_dist - abs_dist;
 
         // calculate the difference in velocity between the particles
         let velocity_delta = p2.vel - self.vel;
@@ -556,61 +554,54 @@ impl Particle {
         // project relative velocity (velocity_delta) along normal vector
         let velocity_along_normal = velocity_delta.x * normal.x + velocity_delta.y * normal.y;
 
+        let combined_mass = self.mass + p2.mass;
+        let separation_factor = 1.1;
+
+        let p1_correction = (overlap * separation_factor) * (p2.mass / combined_mass);
+        let p2_correction = (overlap * separation_factor) * (self.mass / combined_mass);
+
+        self.pos -= normal * p1_correction;
+        p2.pos += normal * p2_correction;
+
         // only rebound if they are moving towards each other. ?
         if velocity_along_normal < 0.0 {
             let normalised_combined_mass = 1.0 / self.mass + 1.0 / p2.mass;
             let impulse_scalar =
                 -(1.0 * COLLISION_RESTITUTION) * velocity_along_normal / normalised_combined_mass;
 
+            let min_impulse_scalar = (self.mass + p2.mass) * 0.1 * velocity_along_normal.abs();
+            let impulse_scalar = impulse_scalar.max(min_impulse_scalar);
+
             // Apply rebound impulse to particles.
-            self.vel -= (normal / self.mass) * impulse_scalar;
-            p2.vel -= (normal / p2.mass) * impulse_scalar;
+            self.vel -= normal * (impulse_scalar / self.mass);
+            p2.vel += normal * (impulse_scalar / p2.mass);
 
-            let min_distance = self.radius + p2.radius;
-            let overlap = min_distance - abs_dist;
-            // let separation_dist = overlap + min_distance * 0.5;
+            let perpendicular_normal = vec2(-normal.y, normal.x);
+            let random_factor = 0.05 * impulse_scalar;
 
-            // move particles away from each other (proportional to their mass)
-            // self.pos -= normal * separation_dist * (p2.mass / (self.mass + p2.mass));
-            // p2.pos += normal * separation_dist * (self.mass / (self.mass + p2.mass));
-
-            // Now relate position correction to impulse magnitude
-            // Basic separation to resolve overlap
-            let base_separation = overlap * 1.1; // 10% extra to prevent immediate re-collision
-
-            // Additional separation based on impulse magnitude
-            // Scale factor depends on your simulation values
-            let impulse_scale = 0.01; // Adjust based on testing
-            let impulse_separation = impulse_scalar.abs() * impulse_scale;
-
-            // Combine with a reasonable maximum to prevent extreme separations
-            let max_separation = min_distance * 0.5; // Max 50% of combined radii
-            let total_separation = (base_separation + impulse_separation).min(max_separation);
-
-            // Apply position correction based on mass
-            let total_mass = self.mass + p2.mass;
-            let i_correction = total_separation * (p2.mass / total_mass);
-            let j_correction = total_separation * (self.mass / total_mass);
+            self.vel += (perpendicular_normal * random_factor) / self.mass;
+            p2.vel -= (perpendicular_normal * random_factor) / p2.mass;
         }
     }
 
     fn apply_physics(&mut self, p2: &mut Particle) {
-        let dist = p2.pos.sub(self.pos);
-        let abs_dist_squared = dist.x.pow(2) + dist.y.pow(2);
+        let dist = p2.pos - self.pos;
+
+        // this is the magnituce of distance between p1,p2
+        let abs_dist = f64::sqrt(dist.x.pow(2) + dist.y.pow(2));
+        let normal = dist / abs_dist;
 
         let min_distance = self.radius + p2.radius;
-        let collision_occurred = abs_dist_squared < min_distance.pow(2);
+        let collision_occurred = abs_dist < min_distance;
 
         if collision_occurred {
-            self.handle_collision(p2, dist, abs_dist_squared);
+            self.handle_collision(p2, abs_dist, normal);
             return;
         }
 
-        let abs_dist = f64::sqrt(abs_dist_squared);
-        let unit_vector = dist / abs_dist;
+        // Applying gravity between the particles.
         let abs_force = (GRAV_CONST * PHYSICS_MULTIPLIER * self.mass * p2.mass) / abs_dist.pow(2.0);
-
-        let force = unit_vector * abs_force;
+        let force = normal * abs_force;
 
         self.force += force;
         p2.force -= force;
