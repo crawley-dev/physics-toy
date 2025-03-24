@@ -24,6 +24,8 @@ struct Particle {
     #[educe(Debug(method(fmt_limited_precision)))]
     vel: Vec2<f64, WorldSpace>,
     #[educe(Debug(method(fmt_limited_precision)))]
+    acc: Vec2<f64, WorldSpace>,
+    #[educe(Debug(method(fmt_limited_precision)))]
     force: Vec2<f64, WorldSpace>,
     #[educe(Debug(method(fmt_limited_precision)))]
     mass: f64,
@@ -205,16 +207,11 @@ impl GravitySim {
                 .mul(MOUSE_DRAWBACK_MULTIPLIER)
                 .cast_unit();
 
-            self.simulation.spawn_particle(
-                mouse_pos_world,
-                velocity,
-                vec2(0.0, 0.0),
-                self.state.draw_size as f64,
-            );
+            self.simulation
+                .spawn_particle(mouse_pos_world, velocity, self.state.draw_size as f64);
         } else if inputs.was_mouse_pressed() {
             self.simulation.spawn_particle(
                 mouse_pos_world,
-                vec2(0.0, 0.0),
                 vec2(0.0, 0.0),
                 self.state.draw_size as f64,
             );
@@ -424,12 +421,12 @@ impl Simulation {
 
             // Inner loop skips i, therefore skips this particel from now on,
             // so apply resitances & update position.
-            p1.vel += p1.force / p1.mass * delta_time;
-            p1.vel *= PHYSICS_RESISTANCE;
+            p1.acc += (p1.force / p1.mass) * delta_time;
+            p1.acc *= PHYSICS_RESISTANCE;
+            p1.vel += p1.acc;
             p1.pos += p1.vel;
 
             p1.force = vec2(0.0, 0.0);
-
             // println!("{p1:#?}");
         }
 
@@ -484,8 +481,8 @@ impl Simulation {
     fn init_particles() -> [SyncCell<Particle>; 2] {
         const RADIUS: f64 = 60.0;
         [
-            create_particle(vec2(120.0, 120.0), vec2(0.0, 0.0), vec2(0.0, 0.0), RADIUS),
-            create_particle(vec2(320.0, 320.0), vec2(0.0, 0.0), vec2(0.0, 0.0), RADIUS),
+            create_particle(vec2(120.0, 120.0), vec2(0.0, 0.0), RADIUS),
+            create_particle(vec2(320.0, 320.0), vec2(0.0, 0.0), RADIUS),
         ]
     }
 
@@ -493,15 +490,14 @@ impl Simulation {
         &mut self,
         pos: Vec2<f64, WorldSpace>,
         vel: Vec2<f64, WorldSpace>,
-        force: Vec2<f64, WorldSpace>,
         radius: f64,
     ) {
-        self.particles
-            .push(create_particle(pos, vel, force, radius));
+        self.particles.push(create_particle(pos, vel, radius));
     }
 }
 
 impl Particle {
+    /*
     fn combine_particles(&mut self, p2: &mut Particle) {
         let consumer_pos = if self.mass > p2.mass {
             self.pos
@@ -529,21 +525,13 @@ impl Particle {
             radius: 0.0,
         };
     }
+    */
     fn handle_collision(
         &mut self,
         p2: &mut Particle,
         abs_dist: f64,
         normal: Vec2<f64, WorldSpace>,
     ) {
-        // TO FUTURE TOM: look into merging particles, base it in momentum transfer.
-
-        // Rebound Particles
-        if abs_dist < SMALL_VALUE {
-            self.pos += self.radius * 0.25;
-            p2.pos += p2.radius * 0.25;
-            return;
-        }
-
         let min_dist = self.radius + p2.radius;
 
         let overlap = min_dist - abs_dist;
@@ -566,21 +554,21 @@ impl Particle {
         // only rebound if they are moving towards each other. ?
         if velocity_along_normal < 0.0 {
             let normalised_combined_mass = 1.0 / self.mass + 1.0 / p2.mass;
-            let impulse_scalar =
-                -(1.0 * COLLISION_RESTITUTION) * velocity_along_normal / normalised_combined_mass;
+            // let impulse_scalar =
+            //     -COLLISION_RESTITUTION * velocity_along_normal / normalised_combined_mass;
 
-            let min_impulse_scalar = (self.mass + p2.mass) * 0.1 * velocity_along_normal.abs();
-            let impulse_scalar = impulse_scalar.max(min_impulse_scalar);
+            let impulse_scalar = (self.mass + p2.mass) * 0.1 * velocity_along_normal.abs();
+            // let impulse_scalar = impulse_scalar.max(min_impulse_scalar);
 
             // Apply rebound impulse to particles.
             self.vel -= normal * (impulse_scalar / self.mass);
             p2.vel += normal * (impulse_scalar / p2.mass);
 
-            let perpendicular_normal = vec2(-normal.y, normal.x);
-            let random_factor = 0.05 * impulse_scalar;
-
-            self.vel += (perpendicular_normal * random_factor) / self.mass;
-            p2.vel -= (perpendicular_normal * random_factor) / p2.mass;
+            // add slight "random factor"
+            // let perpendicular_normal = vec2(-normal.y, normal.x);
+            // let random_factor = 0.05 * impulse_scalar;
+            // self.vel += (perpendicular_normal * random_factor) / self.mass;
+            // p2.vel -= (perpendicular_normal * random_factor) / p2.mass;
         }
     }
 
@@ -600,7 +588,8 @@ impl Particle {
         }
 
         // Applying gravity between the particles.
-        let abs_force = (GRAV_CONST * PHYSICS_MULTIPLIER * self.mass * p2.mass) / abs_dist.pow(2.0);
+        let abs_force =
+            (GRAV_CONST * PHYSICS_MULTIPLIER * self.mass * p2.mass) / (abs_dist.pow(2.0) * 1.5);
         let force = normal * abs_force;
 
         self.force += force;
@@ -611,14 +600,14 @@ impl Particle {
 fn create_particle(
     pos: Vec2<f64, WorldSpace>,
     vel: Vec2<f64, WorldSpace>,
-    force: Vec2<f64, WorldSpace>,
     radius: f64,
 ) -> SyncCell<Particle> {
     SyncCell::new(Particle {
+        radius,
+        mass: f64::consts::PI * 4.0 / 3.0 * radius.pow(3) * EARTH_DENSITY,
         pos,
         vel,
-        mass: f64::consts::PI * 4.0 / 3.0 * radius.pow(3) * EARTH_DENSITY,
-        radius,
-        force,
+        acc: vec2(0.0, 0.0),
+        force: vec2(0.0, 0.0),
     })
 }
