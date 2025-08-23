@@ -1,11 +1,13 @@
-use std::time::Duration;
-
-use crate::{app::InputData, utils::*};
+use crate::utils::{
+    input_data::InputData,
+    vec2::{RenderSpace, ScreenSpace, Vec2},
+};
 use educe::Educe;
+use std::time::Duration;
 
 #[derive(Educe)]
 #[educe(Debug)]
-pub struct SimData<'a> {
+pub struct FrameData<'a> {
     #[educe(Debug(ignore))]
     pub buf: &'a [u8],
     pub size: Vec2<u32, RenderSpace>,
@@ -14,7 +16,7 @@ pub struct SimData<'a> {
 
 // Public facing methods
 pub trait Frontend {
-    fn get_sim_data(&self) -> SimData;
+    fn get_frame_data(&self) -> FrameData;
     fn get_scale(&self) -> u32;
 
     fn resize_sim(&mut self, window_size: Vec2<u32, ScreenSpace>);

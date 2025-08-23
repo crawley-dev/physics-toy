@@ -1,7 +1,17 @@
 use crate::{
-    app::InputData,
-    frontend::{Frontend, SimData},
-    utils::*,
+    frontend::{FrameData, Frontend},
+    utils::{
+        canvas::Shape,
+        colour::Rgba,
+        consts::{
+            CAMERA_RESISTANCE, CAMERA_SPEED, DGRAY, EARTH_DENSITY, GRAV_CONST, GREEN,
+            INIT_DRAW_SIZE, MAX_DRAW_SIZE, MOUSE_DRAWBACK_MULTIPLIER, PHYSICS_MULTIPLIER,
+            PHYSICS_RESISTANCE, RED, TARGET_FPS, WHITE,
+        },
+        input_data::InputData,
+        sync_cell::SyncCell,
+        vec2::{fmt_limited_precision, vec2, RenderSpace, Scale, ScreenSpace, Vec2, WorldSpace},
+    },
 };
 use core::f64;
 use educe::Educe;
@@ -72,10 +82,10 @@ pub struct GravitySim {
 
 impl Frontend for GravitySim {
     // region: Utility
-    fn get_sim_data(&self) -> SimData {
+    fn get_frame_data(&self) -> FrameData {
         let buf = &self.bufs[self.front_buffer];
         let buf_slice = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len()) };
-        SimData {
+        FrameData {
             buf: buf_slice,
             size: self.sim_size.cast(),
             frame: self.state.frame,

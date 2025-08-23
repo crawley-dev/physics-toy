@@ -1,9 +1,14 @@
 use std::{mem::transmute, time::Duration};
 
 use crate::{
-    app::InputData,
-    frontend::{Frontend, SimData},
-    utils::*,
+    frontend::{FrameData, Frontend},
+    utils::{
+        canvas::Shape,
+        colour::Rgba,
+        consts::{DGRAY, GREEN, INIT_DRAW_SIZE, MAX_DRAW_SIZE, WHITE},
+        input_data::InputData,
+        vec2::{vec2, RenderSpace, Scale, ScreenSpace, Vec2},
+    },
 };
 use log::{info, trace};
 use winit::{dpi::Pixel, keyboard::KeyCode};
@@ -56,8 +61,8 @@ pub struct CellSim {
 
 impl Frontend for CellSim {
     // region: Utility
-    fn get_sim_data(&self) -> SimData<'_> {
-        SimData {
+    fn get_frame_data(&self) -> FrameData<'_> {
+        FrameData {
             buf: &self.buf,
             size: self.sim_size.cast(),
             frame: self.state.frame,

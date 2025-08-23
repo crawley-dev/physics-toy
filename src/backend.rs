@@ -1,7 +1,8 @@
 use crate::{
-    frontend::SimData,
-    utils::{vec2, RenderSpace, ScreenSpace, Vec2},
+    frontend::FrameData,
+    utils::vec2::{vec2, RenderSpace, ScreenSpace, Vec2},
 };
+use image::Frame;
 use log::{error, info, trace};
 use std::time::Instant;
 use wgpu::{CompositeAlphaMode, DeviceDescriptor};
@@ -40,7 +41,7 @@ unsafe impl bytemuck::Zeroable for GpuUniforms {}
 unsafe impl bytemuck::Pod for GpuUniforms {}
 
 impl<'a> Backend<'a> {
-    pub fn render(&mut self, sim_data: &SimData, start: Instant) {
+    pub fn render(&mut self, frame_data: &FrameData, start: Instant) {
         optick::event!("Backend::render");
 
         let frame = match self.surface.get_current_texture() {
@@ -48,7 +49,7 @@ impl<'a> Backend<'a> {
             // can't gracefully exit in oom states
             Err(wgpu::SurfaceError::OutOfMemory) => std::process::exit(0),
             Err(wgpu::SurfaceError::Lost) => {
-                self.resize(self.window_size, sim_data);
+                self.resize(self.window_size, frame_data);
                 // TODO(TOM): logging the error, but not handling it.
                 error!("SurfaceError::Lost, cannot resize simulation in this scope. fix this tom!");
                 return;
@@ -103,7 +104,7 @@ impl<'a> Backend<'a> {
 
         {
             optick::event!("Update texture && draw");
-            Self::update_texture(&self.queue, &self.texture, sim_data);
+            Self::update_texture(&self.queue, &self.texture, frame_data);
 
             // Takes 6 vertices (2 triangles = 1 square) and the vertex & fragment shader
             render_pass.draw(0..6, 0..1);
@@ -118,26 +119,29 @@ impl<'a> Backend<'a> {
         }
     }
 
-    pub fn resize(&mut self, window_size: Vec2<u32, ScreenSpace>, sim_data: &SimData) {
+    pub fn resize(&mut self, window_size: Vec2<u32, ScreenSpace>, frame_data: &FrameData) {
         optick::event!("Backend::resize");
 
-        trace!("Attempting window & texture resize to {:?}", sim_data.size);
+        trace!(
+            "Attempting window & texture resize to {:?}",
+            frame_data.size
+        );
 
         self.window_size = window_size;
         self.config.width = self.window_size.x;
         self.config.height = self.window_size.y;
         self.surface.configure(&self.device, &self.config);
 
-        self.resize_texture(sim_data);
+        self.resize_texture(frame_data);
     }
 
-    pub fn resize_texture(&mut self, sim_data: &SimData) {
+    pub fn resize_texture(&mut self, frame_data: &FrameData) {
         // create new texture
         self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("RGBA Texture"),
             size: wgpu::Extent3d {
-                width: sim_data.size.x,
-                height: sim_data.size.y,
+                width: frame_data.size.x,
+                height: frame_data.size.y,
                 depth_or_array_layers: 1, // set to 1 for 2D textures
             },
             mip_level_count: 1,
@@ -156,7 +160,7 @@ impl<'a> Backend<'a> {
         self.gpu_uniforms = GpuUniforms {
             padding: self.gpu_uniforms.padding,
             time: self.gpu_uniforms.time,
-            texture_size: sim_data.size.cast().to_array(),
+            texture_size: frame_data.size.cast().to_array(),
             window_size: self.window_size.cast().to_array(),
         };
 
@@ -183,16 +187,16 @@ impl<'a> Backend<'a> {
             ],
         });
 
-        Self::update_texture(&self.queue, &self.texture, sim_data);
+        Self::update_texture(&self.queue, &self.texture, frame_data);
     }
 
-    fn update_texture(queue: &wgpu::Queue, texture: &wgpu::Texture, sim_data: &SimData) {
+    fn update_texture(queue: &wgpu::Queue, texture: &wgpu::Texture, frame_data: &FrameData) {
         let tex_size = texture.size();
-        let computed_data_len = (4 * sim_data.size.x * sim_data.size.y) as usize;
+        let computed_data_len = (4 * frame_data.size.x * frame_data.size.y) as usize;
 
-        assert_eq!(tex_size.width, sim_data.size.x);
-        assert_eq!(tex_size.height, sim_data.size.y);
-        assert_eq!(sim_data.buf.len(), computed_data_len, "{sim_data:#?}");
+        assert_eq!(tex_size.width, frame_data.size.x);
+        assert_eq!(tex_size.height, frame_data.size.y);
+        assert_eq!(frame_data.buf.len(), computed_data_len, "{frame_data:#?}");
 
         queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -201,15 +205,15 @@ impl<'a> Backend<'a> {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            sim_data.buf,
+            frame_data.buf,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * sim_data.size.x),
-                rows_per_image: Some(sim_data.size.y),
+                bytes_per_row: Some(4 * frame_data.size.x),
+                rows_per_image: Some(frame_data.size.y),
             },
             wgpu::Extent3d {
-                width: sim_data.size.x,
-                height: sim_data.size.y,
+                width: frame_data.size.x,
+                height: frame_data.size.y,
                 depth_or_array_layers: 1,
             },
         );
@@ -276,7 +280,7 @@ impl<'a> Backend<'a> {
     }
 
     fn create_texture(
-        sim_data: &SimData,
+        frame_data: &FrameData,
         queue: &wgpu::Queue,
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
@@ -290,8 +294,8 @@ impl<'a> Backend<'a> {
 
         // >> Creating Texture <<
         let texture_size = wgpu::Extent3d {
-            width: sim_data.size.x,
-            height: sim_data.size.y,
+            width: frame_data.size.x,
+            height: frame_data.size.y,
             depth_or_array_layers: 1, // set to 1 for 2D textures
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -308,7 +312,7 @@ impl<'a> Backend<'a> {
             // not supported on the WebGL2 backend.
             view_formats: &[],
         });
-        Self::update_texture(queue, &texture, sim_data);
+        Self::update_texture(queue, &texture, frame_data);
         info!("Texture created, size: {:?}", texture.size());
 
         texture
@@ -472,7 +476,7 @@ impl<'a> Backend<'a> {
         (bind_group, sampler)
     }
 
-    pub async fn new(window: &'a Window, sim_data: SimData<'_>) -> Self {
+    pub async fn new(window: &'a Window, frame_data: FrameData<'_>) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             // TODO(TOM): if wasm, use GL.
@@ -483,12 +487,12 @@ impl<'a> Backend<'a> {
         let (surface, device, queue, config, window_size) =
             Self::create_surface(&instance, window).await;
 
-        let texture = Self::create_texture(&sim_data, &queue, &device, &config);
+        let texture = Self::create_texture(&frame_data, &queue, &device, &config);
 
         let (render_pipeline, bind_group_layout) = Self::create_render_pipeline(&device, &config);
 
         let (gpu_uniforms, gpu_data_buffer) =
-            Self::create_gpu_uniforms(&device, sim_data.size, window_size);
+            Self::create_gpu_uniforms(&device, frame_data.size, window_size);
 
         let (bind_group, sampler) =
             Self::create_bind_group(&device, &bind_group_layout, &texture, &gpu_data_buffer);
