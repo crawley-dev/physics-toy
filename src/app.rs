@@ -7,13 +7,14 @@ use crate::{
             TARGET_FPS,
         },
         input_data::{InputData, MouseInput},
-        vec2::{vec2, ScreenSpace, Vec2},
+        vec2::{vec2, Vec2, WindowSpace},
     },
 };
 use educe::Educe;
 use log::{info, trace, warn};
 use std::{
     mem::transmute,
+    rc::Rc,
     time::{Duration, Instant},
 };
 use winit::{
@@ -24,33 +25,40 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-pub struct App<'a, F: Frontend + 'a> {
-    event_loop: EventLoop<()>,
-    frontend: F,
-    backend: Backend<'a>,
-    inputs: InputData,
+pub struct App<'a, F: Frontend> {
+    pub event_loop: EventLoop<()>,
+    pub frontend: F,
+    pub backend: Backend<'a>,
+    pub inputs: InputData,
 }
 
-impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
-    // This needs to be a separate function so I can borrwo the window for app's lifetime
-    pub fn init_window(
-        title: &str,
-        window_size: Vec2<u32, ScreenSpace>,
-    ) -> (EventLoop<()>, Window) {
-        assert!(window_size.x > 0 && window_size.y > 0);
+pub fn init_window(
+    title: &'static str,
+    window_size: Vec2<u32, WindowSpace>,
+) -> (Window, EventLoop<()>) {
+    let event_loop = EventLoop::new().unwrap();
+    let window = WindowBuilder::new()
+        .with_title(title)
+        .with_inner_size(PhysicalSize::new(window_size.x, window_size.y))
+        .build(&event_loop)
+        .unwrap();
 
-        let event_loop = EventLoop::new().unwrap();
-        let window = WindowBuilder::new()
-            .with_title(title)
-            .with_inner_size(PhysicalSize::new(window_size.x, window_size.y))
-            .build(&event_loop)
-            .unwrap();
+    (window, event_loop)
+}
 
-        (event_loop, window)
-    }
-
-    pub fn new(event_loop: EventLoop<()>, window: &'a Window, frontend: F) -> Self {
-        let backend = pollster::block_on(Backend::new(window, frontend.get_frame_data()));
+impl<'a, F: Frontend + std::fmt::Debug> App<'a, F> {
+    pub fn new(
+        event_loop: EventLoop<()>,
+        window: &'a Window,
+        window_size: Vec2<u32, WindowSpace>,
+        init_scale_factor: u32,
+    ) -> Self {
+        let frontend = F::new(window_size, init_scale_factor);
+        let backend = pollster::block_on(Backend::new(
+            window,
+            window_size,
+            frontend.get_texture_data(),
+        ));
 
         App {
             event_loop,
@@ -80,6 +88,7 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
         let start = Instant::now();
         let mut frame_timer = start;
         let mut avg_frame_time = Duration::from_millis(FRAME_TIME_MS as u64);
+        let mut frame = 0;
 
         self.event_loop
             .run(move |event, control_flow| match event {
@@ -134,14 +143,15 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
 
                         optick::event!("Window Resize");
 
-                        self.frontend.resize_sim(size);
-                        self.backend.resize(size, &self.frontend.get_frame_data());
+                        self.frontend.resize_texture(size);
+                        self.backend.resize(size, &self.frontend.get_texture_data());
                     }
                     WindowEvent::RedrawRequested if window_id == self.backend.window.id() => {
                         if self.backend.window.is_minimized().unwrap() {
                             return;
                         }
 
+                        frame += 1;
                         optick::next_frame();
 
                         Self::handle_window_inputs(
@@ -154,10 +164,10 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
 
                         Self::clear_inputs(&mut self.inputs);
 
-                        let sim_data = self.frontend.get_frame_data();
-                        self.backend.render(&sim_data, start);
+                        let texture_data = self.frontend.get_texture_data();
+                        self.backend.render(&texture_data, start);
 
-                        let avg_frame_time = Self::timing(sim_data.frame, start, &mut frame_timer);
+                        let avg_frame_time = Self::timing(frame, start, &mut frame_timer);
                     }
                     _ => {}
                 },
@@ -206,12 +216,13 @@ impl<'a, F: Frontend + std::fmt::Debug + 'a> App<'a, F> {
         optick::event!("App::handle_inputs");
 
         // Scale factor on KeyPlus and KeyMinus
-        if inputs.is_pressed(KeyCode::Minus) && frontend.get_scale() > 1 {
-            frontend.rescale_sim(frontend.get_scale() - 1);
-            backend.resize_texture(&frontend.get_frame_data());
-        } else if inputs.is_pressed(KeyCode::Equal) && frontend.get_scale() < SIM_MAX_SCALE {
-            frontend.rescale_sim(frontend.get_scale() + 1);
-            backend.resize_texture(&frontend.get_frame_data());
+        if inputs.is_pressed(KeyCode::Minus) && frontend.get_texture_scale() > 1 {
+            frontend.rescale_texture(frontend.get_texture_scale() - 1);
+            backend.resize_texture(&frontend.get_texture_data());
+        } else if inputs.is_pressed(KeyCode::Equal) && frontend.get_texture_scale() < SIM_MAX_SCALE
+        {
+            frontend.rescale_texture(frontend.get_texture_scale() + 1);
+            backend.resize_texture(&frontend.get_texture_data());
         }
     }
 

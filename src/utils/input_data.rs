@@ -5,7 +5,7 @@ use winit::keyboard::KeyCode;
 
 use crate::utils::{
     consts::{MOUSE_DRAG_THRESHOLD_PX, MOUSE_HOLD_THRESHOLD_MS},
-    vec2::{ScreenSpace, Vec2},
+    vec2::{Vec2, WindowSpace},
 };
 
 #[derive(Educe, Clone, Copy)]
@@ -13,13 +13,13 @@ use crate::utils::{
 pub struct MouseInput {
     pub state: bool,
     pub time: Instant,
-    pub pos: Vec2<f64, ScreenSpace>,
+    pub pos: Vec2<f64, WindowSpace>,
 }
 
 #[derive(Educe, Clone, Copy)]
 #[educe(Debug)]
 pub struct InputData {
-    pub mouse_pos: Vec2<f64, ScreenSpace>,
+    pub mouse_pos: Vec2<f64, WindowSpace>,
     // this is used for holds, if mouse_down but not mouse_pressed
     // then it is held.
     pub mouse_down: bool,

@@ -2,14 +2,15 @@ use rayon::ThreadPoolBuildError;
 use winit::keyboard::KeyCode;
 
 use crate::{
-    frontend::{FrameData, Frontend},
+    frontend::{Frontend, TextureData},
     utils::{
-        canvas::Canvas,
+        // canvas::Canvas,
         consts::{
             CAMERA_RESISTANCE, CAMERA_SPEED, DGRAY, MOUSE_DRAWBACK_MULTIPLIER, RED, SIM_MAX_SCALE,
         },
         input_data::InputData,
-        vec2::{vec2, RenderSpace, Scale, ScreenSpace, Vec2, WorldSpace},
+        vec2::{vec2, TextureSpace, Vec2, WindowSpace, WorldSpace},
+        world::World,
     },
 };
 use std::{
@@ -22,9 +23,8 @@ use std::{
 #[derive(Debug, Clone, Copy)]
 pub struct GameState {
     frame: u32,
-    sim_scale: Scale<u32, ScreenSpace, RenderSpace>,
-    window_size: Vec2<u32, ScreenSpace>,
-    sim_size: Vec2<u32, RenderSpace>,
+    texture_scale: u32,
+    window_size: Vec2<u32, WindowSpace>,
     is_running: bool,
 }
 
@@ -34,66 +34,68 @@ pub struct FallingEverything {
     prev_state: GameState,
 
     objects: Vec<RigidBody>,
-    canvas: Canvas,
+    world: World,
 }
 
 impl Frontend for FallingEverything {
-    fn get_frame_data(&self) -> FrameData {
-        FrameData {
-            buf: &self.canvas.get_texture_buffer(),
-            size: self.state.window_size.scale(self.state.sim_scale),
-            frame: self.state.frame as usize,
+    fn get_texture_data(&self) -> TextureData {
+        TextureData {
+            texture_buffer: &self.world.get_viewport_texture(),
+            texture_size: self
+                .state
+                .window_size
+                .to_texture_space(self.state.texture_scale),
         }
     }
 
-    fn get_scale(&self) -> u32 {
-        self.state.sim_scale.get()
+    fn get_texture_scale(&self) -> u32 {
+        self.state.texture_scale
     }
 
-    fn resize_sim(&mut self, window_size: Vec2<u32, ScreenSpace>) {
-        assert!(window_size.x > 0 && window_size.y > 0);
+    fn resize_texture(&mut self, window_size: Vec2<u32, WindowSpace>) {
         self.state.window_size = window_size;
-        self.state.sim_size = window_size.scale(self.state.sim_scale);
-        self.canvas.resize(self.state.sim_size);
+        self.world
+            .resize(window_size.to_texture_space(self.state.texture_scale));
     }
 
-    fn rescale_sim(&mut self, scale: u32) {
-        self.state.sim_scale = Scale::new(scale);
-        self.resize_sim(self.state.window_size);
+    fn rescale_texture(&mut self, scale: u32) {
+        self.state.texture_scale = scale;
+        self.resize_texture(self.state.window_size);
     }
 
     fn update(&mut self, inputs: &mut InputData, delta_time: Duration) {
-        self.canvas.draw_all(DGRAY);
+        self.world.draw_all(DGRAY);
 
         self.handle_inputs(inputs, delta_time.as_secs_f64());
 
         if (self.state.is_running) {
-            let obj_len = self.objects.len();
-            for i in 0..obj_len {
-                let obj = &self.objects[i];
-                for j in 0..obj_len {
-                    if i == j {
-                        continue;
-                    }
-
-                    let other_obj = &self.objects[j];
-                    match obj.object.does_collide(&other_obj.object) {
-                        Some(collision) => {
-                            // obj.handle_collision(other_obj, collision);
-                        }
-                        None => {}
-                    }
-                }
+            for i in 0..self.objects.len() {
+                let obj = &mut self.objects[i];
+                obj.update(delta_time.as_secs_f32());
+                self.world.draw_polygon(&obj.object.vertices, RED);
             }
-
-            // for object in &mut self.objects {
-            //     object.update(delta_time.as_secs_f32());
-            //     self.canvas.draw_polygon(&object.object.vertices, RED);
-            // }
         }
 
         self.prev_state = self.state;
         self.state.frame += 1;
+    }
+
+    fn new(window_size: Vec2<u32, WindowSpace>, init_scale_factor: u32) -> Self {
+        let state = GameState {
+            frame: 0,
+            texture_scale: init_scale_factor,
+            window_size,
+            is_running: true,
+        };
+        let prev_state = state.clone();
+        let viewport_size = window_size.to_texture_space(init_scale_factor);
+
+        Self {
+            state,
+            prev_state,
+            objects: vec![],
+            world: World::new(viewport_size),
+        }
     }
 }
 
@@ -114,25 +116,31 @@ impl FallingEverything {
         camera_accel.y += inputs.is_held(KeyCode::KeyS) as i32 as f64;
         camera_accel.x += inputs.is_held(KeyCode::KeyD) as i32 as f64;
         camera_accel.x -= inputs.is_held(KeyCode::KeyA) as i32 as f64;
-        camera_accel *= CAMERA_SPEED * (SIM_MAX_SCALE - self.state.sim_scale.get() + 1) as f64;
+        camera_accel *= CAMERA_SPEED * (SIM_MAX_SCALE - self.state.texture_scale + 1) as f64;
 
-        self.canvas
-            .move_camera(camera_accel.cast::<f32>(), (CAMERA_RESISTANCE) as f32);
+        self.world.update_camera(camera_accel, CAMERA_RESISTANCE);
 
         if inputs.is_pressed(KeyCode::KeyR) {
-            self.canvas.reset_camera();
+            self.world.reset_viewport();
         }
     }
 
     pub fn handle_object_spawning(&mut self, inputs: &InputData) {
         let mass = 0.3;
         if inputs.was_mouse_dragging() {
-            let released_pos = self.screen_to_worldspace(inputs.mouse_released.pos.cast::<f32>());
-            let pressed_pos = self.screen_to_worldspace(inputs.mouse_pressed.pos.cast::<f32>());
+            let released_pos = inputs
+                .mouse_released
+                .pos
+                .to_world_space(self.state.texture_scale, self.world.camera_pos)
+                .cast::<f32>();
+            let pressed_pos = inputs
+                .mouse_pressed
+                .pos
+                .to_world_space(self.state.texture_scale, self.world.camera_pos)
+                .cast::<f32>();
 
             let force = pressed_pos
                 .sub(released_pos)
-                .div(self.state.sim_scale.get() as f32)
                 .mul(MOUSE_DRAWBACK_MULTIPLIER as f32);
 
             self.spawn_rigidbody(pressed_pos, mass, vec2(0.0, 0.0), force);
@@ -140,7 +148,10 @@ impl FallingEverything {
             let velocity = vec2(0.0, 0.0);
             let force = vec2(0.0, 0.0);
             self.spawn_rigidbody(
-                self.screen_to_worldspace(inputs.mouse_pos.cast::<f32>()),
+                inputs
+                    .mouse_pos
+                    .to_world_space(self.state.texture_scale, self.world.camera_pos)
+                    .cast::<f32>(),
                 mass,
                 velocity,
                 force,
@@ -159,33 +170,6 @@ impl FallingEverything {
         let rigid_body = RigidBody::new(object, mass, 1.0, velocity, force);
         self.objects.push(rigid_body);
         self.objects.last().unwrap()
-    }
-
-    fn screen_to_worldspace(&self, screen_pos: Vec2<f32, ScreenSpace>) -> Vec2<f32, WorldSpace> {
-        self.render_to_worldspace(screen_pos.scale(self.state.sim_scale))
-    }
-
-    fn render_to_worldspace(&self, render_pos: Vec2<f32, RenderSpace>) -> Vec2<f32, WorldSpace> {
-        render_pos.cast_unit() + self.canvas.camera
-    }
-
-    pub fn new(window_size: Vec2<u32, ScreenSpace>, scale: u32) -> Self {
-        let sim_scale = Scale::new(scale);
-        let state = GameState {
-            frame: 0,
-            sim_scale,
-            window_size,
-            sim_size: window_size.scale(sim_scale).cast_unit::<RenderSpace>(),
-            is_running: true,
-        };
-        let prev_state = state.clone();
-
-        Self {
-            state,
-            prev_state,
-            objects: vec![],
-            canvas: Canvas::new(state.sim_size),
-        }
     }
 }
 
@@ -293,51 +277,52 @@ impl Square {
     }
 
     fn does_collide(&self, other: &Self) -> Option<Collision> {
-        let edge_normals = self.compute_edge_normals();
-        let other_edge_normals = other.compute_edge_normals();
-        let axes = edge_normals
-            .into_iter()
-            .chain(other_edge_normals.into_iter())
-            .collect::<Vec<Vec2<f32, WorldSpace>>>();
+        None
+        // let edge_normals = self.compute_edge_normals();
+        // let other_edge_normals = other.compute_edge_normals();
+        // let axes = edge_normals
+        //     .into_iter()
+        //     .chain(other_edge_normals.into_iter())
+        //     .collect::<Vec<Vec2<f32, WorldSpace>>>();
 
-        let centre_a =
-            self.vertices.iter().sum::<Vec2<f32, WorldSpace>>() / self.vertices.len() as f32;
-        // let centre_a = self.vertices.iter().copied().sum::<Vec2<f32, WorldSpace>>()
-        // / self.vertices.len() as f32;
-        // let centre_b = other
-        //     .vertices
-        //     .iter()
-        //     .copied()
-        //     .sum::<Vec2<f32, WorldSpace>>()
-        //     / other.vertices.len() as f32;
-        // let ab = centre_b - centre_a;
+        // let centre_a =
+        //     self.vertices.iter().sum::<Vec2<f32, WorldSpace>>() / self.vertices.len() as f32;
+        // // let centre_a = self.vertices.iter().copied().sum::<Vec2<f32, WorldSpace>>()
+        // // / self.vertices.len() as f32;
+        // // let centre_b = other
+        // //     .vertices
+        // //     .iter()
+        // //     .copied()
+        // //     .sum::<Vec2<f32, WorldSpace>>()
+        // //     / other.vertices.len() as f32;
+        // // let ab = centre_b - centre_a;
 
-        let min_overlap = f32::INFINITY;
-        let mut best_axis = vec2(0.0, 0.0);
+        // let min_overlap = f32::INFINITY;
+        // let mut best_axis = vec2(0.0, 0.0);
 
-        // for mut axis in axes {
-        //     if axis.cross_product(ab) < 0.0 {
-        //         axis = -axis;
-        //     }
+        // // for mut axis in axes {
+        // //     if axis.cross_product(ab) < 0.0 {
+        // //         axis = -axis;
+        // //     }
 
-        //     let proj_a = project(self, axis);
-        //     let proj_b = project(other, axis);
-        //     let overlap = interval_overlap(proj_a, proj_b);
+        // //     let proj_a = project(self, axis);
+        // //     let proj_b = project(other, axis);
+        // //     let overlap = interval_overlap(proj_a, proj_b);
 
-        //     if overlap <= 0.0 {
-        //         return None; // No collision
-        //     }
+        // //     if overlap <= 0.0 {
+        // //         return None; // No collision
+        // //     }
 
-        //     if overlap < min_overlap {
-        //         min_overlap = overlap;
-        //         best_axis = axis;
-        //     }
-        // }
+        // //     if overlap < min_overlap {
+        // //         min_overlap = overlap;
+        // //         best_axis = axis;
+        // //     }
+        // // }
 
-        Some(Collision {
-            normal: best_axis,
-            penetration: min_overlap,
-        })
+        // Some(Collision {
+        //     normal: best_axis,
+        //     penetration: min_overlap,
+        // })
     }
 
     pub fn compute_edge_normals(&self) -> [Vec2<f32, WorldSpace>; 4] {

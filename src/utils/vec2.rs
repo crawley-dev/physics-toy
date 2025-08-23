@@ -6,6 +6,7 @@ use std::{
     marker::PhantomData,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
+use wgpu::Texture;
 
 pub trait CoordSpace {}
 macro_rules! create_coordinate_space {
@@ -16,38 +17,9 @@ macro_rules! create_coordinate_space {
     };
 }
 
-create_coordinate_space!(ScreenSpace); // Space of the window e.g. 720x480
-create_coordinate_space!(RenderSpace); // Space of the simulation e.g. 360x240
-create_coordinate_space!(WorldSpace); // Space of the world, any number, could be offscreen!
-create_coordinate_space!(Unknown);
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Scale<T: Num + Copy + std::ops::Mul, Src: CoordSpace, Dst: CoordSpace>(
-    T,
-    PhantomData<(Src, Dst)>,
-);
-impl<T: Num + Copy + std::ops::Mul, Src: CoordSpace, Dst: CoordSpace> Scale<T, Src, Dst> {
-    pub fn new(val: T) -> Self {
-        Self(val, PhantomData)
-    }
-
-    pub fn get(&self) -> T {
-        self.0
-    }
-}
-impl<T: fmt::Display + Num + Copy + std::ops::Mul, Src: CoordSpace, Dst: CoordSpace> fmt::Debug
-    for Scale<T, Src, Dst>
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Scale({}, ({} -> {}))",
-            self.0,
-            std::any::type_name::<Src>(),
-            std::any::type_name::<Dst>()
-        )
-    }
-}
+create_coordinate_space!(WindowSpace); // Space of the window e.g. 720x480
+create_coordinate_space!(TextureSpace);
+create_coordinate_space!(WorldSpace); // Space of the world, any number
 
 #[derive(Educe, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[educe(Debug)]
@@ -118,17 +90,55 @@ impl<T: fmt::Debug + Num + Copy + NumCast, U: CoordSpace> Vec2<T, U> {
     pub fn to_array(self) -> [T; 2] {
         [self.x, self.y]
     }
+}
 
-    pub fn scale<SrcT: Num + Copy + NumCast, Dst: CoordSpace>(
+impl<T: fmt::Debug + Num + Copy + NumCast> Vec2<T, WindowSpace> {
+    pub fn to_texture_space<X: num::ToPrimitive + Copy>(
         self,
-        scale: Scale<SrcT, U, Dst>,
-    ) -> Vec2<T, Dst>
-    where
-        T: Mul,
-    {
+        texture_scale: X,
+    ) -> Vec2<T, TextureSpace> {
         Vec2 {
-            x: self.x / T::from(scale.get()).unwrap(),
-            y: self.y / T::from(scale.get()).unwrap(),
+            x: self.x / T::from(texture_scale).unwrap(),
+            y: self.y / T::from(texture_scale).unwrap(),
+            _unit: PhantomData,
+        }
+    }
+
+    pub fn to_world_space<X: num::ToPrimitive + Copy, T2: fmt::Debug + Num + Copy + NumCast>(
+        self,
+        texture_scale: X,
+        camera: Vec2<T2, WorldSpace>,
+    ) -> Vec2<T, WorldSpace> {
+        let scale = T::from(texture_scale).unwrap();
+        Vec2 {
+            x: self.x / scale + T::from(camera.x).unwrap(),
+            y: self.y / scale + T::from(camera.y).unwrap(),
+            _unit: PhantomData,
+        }
+    }
+}
+
+impl<T: fmt::Debug + Num + Copy + NumCast> Vec2<T, TextureSpace> {
+    pub fn to_world_space<T2: fmt::Debug + Num + Copy + NumCast>(
+        self,
+        camera: Vec2<T2, WorldSpace>,
+    ) -> Vec2<T, WorldSpace> {
+        Vec2 {
+            x: self.x + T::from(camera.x).unwrap(),
+            y: self.y + T::from(camera.y).unwrap(),
+            _unit: PhantomData,
+        }
+    }
+}
+
+impl<T: fmt::Debug + Num + Copy + NumCast> Vec2<T, WorldSpace> {
+    pub fn to_texture_space<T2: fmt::Debug + Num + Copy + NumCast>(
+        self,
+        camera: Vec2<T2, WorldSpace>,
+    ) -> Vec2<T, TextureSpace> {
+        Vec2 {
+            x: self.x - T::from(camera.x).unwrap(),
+            y: self.y - T::from(camera.y).unwrap(),
             _unit: PhantomData,
         }
     }

@@ -6,9 +6,179 @@ use wgpu::RenderBundleDepthStencil;
 use crate::utils::{
     colour::Rgba,
     consts::CAMERA_RESISTANCE,
-    vec2::{vec2, CoordSpace, RenderSpace, Vec2, WorldSpace},
+    vec2::{vec2, CoordSpace, TextureSpace, Vec2, WindowSpace, WorldSpace},
 };
 
+#[derive(Debug, Clone)]
+pub struct World {
+    pub camera_pos: Vec2<f64, WorldSpace>,
+    pub camera_vel: Vec2<f64, WorldSpace>,
+
+    pub viewport_size: Vec2<u32, TextureSpace>,
+    pub viewport_texture: Vec<u8>,
+}
+
+impl World {
+    pub fn is_out_of_bounds(&self, pos: Vec2<i32, TextureSpace>) -> bool {
+        pos.x >= self.viewport_size.x as i32
+            || pos.y >= self.viewport_size.y as i32
+            || pos.x < 0
+            || pos.y < 0
+    }
+
+    pub fn get_viewport_texture(&self) -> &[u8] {
+        &self.viewport_texture
+    }
+
+    pub fn resize(&mut self, new_size: Vec2<u32, TextureSpace>) {
+        self.viewport_size = new_size;
+        self.viewport_texture = vec![0; (new_size.x * new_size.y * 4) as usize];
+    }
+
+    pub fn reset_viewport(&mut self) {
+        self.camera_pos = vec2(0.0, 0.0);
+        self.camera_vel = vec2(0.0, 0.0);
+    }
+
+    pub fn update_camera(&mut self, acceleration: Vec2<f64, WorldSpace>, resistance: f64) {
+        self.camera_vel += acceleration;
+        self.camera_vel *= resistance;
+        self.camera_pos += self.camera_vel;
+    }
+
+    pub fn new(viewport_size: Vec2<u32, TextureSpace>) -> Self {
+        let viewport_texture = vec![0; (viewport_size.x * viewport_size.y * 4) as usize];
+        Self {
+            camera_pos: vec2(0.0, 0.0),
+            camera_vel: vec2(0.0, 0.0),
+            viewport_size,
+            viewport_texture,
+        }
+    }
+}
+
+// Drawing
+impl World {
+    pub fn draw_cell(&mut self, position: Vec2<i32, WorldSpace>, colour: Rgba) {
+        let position = position.to_texture_space(self.camera_pos);
+        if self.is_out_of_bounds(position) {
+            return;
+        }
+
+        // is_out_of_bounds does an underflow check, so we can safely cast to u32.
+        let index = 4 * (position.y as u32 * self.viewport_size.x + position.x as u32) as usize;
+        if index < self.viewport_texture.len() {
+            self.viewport_texture[index] = colour.r;
+            self.viewport_texture[index + 1] = colour.g;
+            self.viewport_texture[index + 2] = colour.b;
+            self.viewport_texture[index + 3] = colour.a;
+        }
+    }
+
+    pub fn draw_all(&mut self, colour: Rgba) {
+        for chunk in self.viewport_texture.chunks_exact_mut(4) {
+            chunk[0] = colour.r;
+            chunk[1] = colour.g;
+            chunk[2] = colour.b;
+            chunk[3] = colour.a;
+        }
+    }
+
+    pub fn draw_line(
+        &mut self,
+        start: Vec2<f32, WorldSpace>,
+        end: Vec2<f32, WorldSpace>,
+        colour: Rgba,
+    ) {
+        let dx = (end.x as i32 - start.x as i32).abs();
+        let dy = (end.y as i32 - start.y as i32).abs();
+        let sx = if start.x < end.x { 1 } else { -1 };
+        let sy = if start.y < end.y { 1 } else { -1 };
+        let mut err = dx - dy;
+
+        let mut x = start.x as i32;
+        let mut y = start.y as i32;
+
+        loop {
+            self.draw_cell(vec2(x, y), colour);
+            if x == end.x as i32 && y == end.y as i32 {
+                break;
+            }
+            let err2 = err * 2;
+            if err2 > -dy {
+                err -= dy;
+                x += sx;
+            }
+            if err2 < dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
+    pub fn draw_circle_outline(
+        &mut self,
+        centre: Vec2<i32, WorldSpace>,
+        radius: u32,
+        colour: Rgba,
+    ) {
+        let mut x = radius as i32;
+        let mut y = 0;
+        let mut d = 1 - radius as i32;
+
+        while x >= y {
+            self.draw_cell(centre + vec2(x, y), colour);
+            self.draw_cell(centre + vec2(y, x), colour);
+            self.draw_cell(centre - vec2(y, x), colour);
+            self.draw_cell(centre - vec2(x, y), colour);
+            self.draw_cell(centre + vec2(-x, -y), colour);
+            self.draw_cell(centre + vec2(-y, -x), colour);
+            self.draw_cell(centre - vec2(-y, -x), colour);
+            self.draw_cell(centre - vec2(-x, -y), colour);
+            y += 1;
+            if d < 0 {
+                d += 2 * y + 1;
+            } else {
+                x -= 1;
+                d += 2 * (y - x) + 1;
+            }
+        }
+    }
+
+    pub fn draw_circle_fill(&mut self, centre: Vec2<i32, WorldSpace>, radius: u32, colour: Rgba) {
+        let mut x = radius as i32;
+        let mut y = 0;
+        let mut d = 1 - radius as i32;
+
+        while x >= y {
+            for i in -x..=x {
+                self.draw_cell(centre + vec2(i, y).cast(), colour);
+                self.draw_cell(centre + vec2(i, -y).cast(), colour);
+            }
+            for i in -y..=y {
+                self.draw_cell(centre + vec2(i, x).cast(), colour);
+                self.draw_cell(centre + vec2(i, -x).cast(), colour);
+            }
+            y += 1;
+            if d < 0 {
+                d += 2 * y + 1;
+            } else {
+                x -= 1;
+                d += 2 * (y - x) + 1;
+            }
+        }
+    }
+
+    pub fn draw_polygon(&mut self, vertices: &[Vec2<f32, WorldSpace>], colour: Rgba) {
+        for i in 0..vertices.len() {
+            let start = vertices[i];
+            let end = vertices[(i + 1) % vertices.len()];
+            self.draw_line(start, end, colour);
+        }
+    }
+}
+
+/*
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(dead_code)] // don't match shape, I index into it (app::handle_inputs)
@@ -270,3 +440,4 @@ impl Canvas {
         }
     }
 }
+ */

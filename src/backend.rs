@@ -1,19 +1,23 @@
 use crate::{
-    frontend::FrameData,
-    utils::vec2::{vec2, RenderSpace, ScreenSpace, Vec2},
+    frontend::TextureData,
+    utils::{
+        consts::INIT_TITLE,
+        vec2::{vec2, TextureSpace, Vec2, WindowSpace},
+    },
 };
 use image::Frame;
 use log::{error, info, trace};
 use std::time::Instant;
 use wgpu::{CompositeAlphaMode, DeviceDescriptor};
-use winit::window::Window;
+use winit::{
+    dpi::PhysicalSize,
+    event_loop::EventLoop,
+    window::{Window, WindowAttributes, WindowBuilder},
+};
 
 pub struct Backend<'a> {
-    // The window must be declared after the surface so
-    // it gets dropped after it as the surface contains
-    // unsafe references to the window's resources.
     pub window: &'a Window,
-    window_size: Vec2<u32, ScreenSpace>,
+    window_size: Vec2<u32, WindowSpace>,
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -41,7 +45,7 @@ unsafe impl bytemuck::Zeroable for GpuUniforms {}
 unsafe impl bytemuck::Pod for GpuUniforms {}
 
 impl<'a> Backend<'a> {
-    pub fn render(&mut self, frame_data: &FrameData, start: Instant) {
+    pub fn render(&mut self, texture_data: &TextureData, start: Instant) {
         optick::event!("Backend::render");
 
         let frame = match self.surface.get_current_texture() {
@@ -49,7 +53,7 @@ impl<'a> Backend<'a> {
             // can't gracefully exit in oom states
             Err(wgpu::SurfaceError::OutOfMemory) => std::process::exit(0),
             Err(wgpu::SurfaceError::Lost) => {
-                self.resize(self.window_size, frame_data);
+                self.resize(self.window_size, texture_data);
                 // TODO(TOM): logging the error, but not handling it.
                 error!("SurfaceError::Lost, cannot resize simulation in this scope. fix this tom!");
                 return;
@@ -104,7 +108,7 @@ impl<'a> Backend<'a> {
 
         {
             optick::event!("Update texture && draw");
-            Self::update_texture(&self.queue, &self.texture, frame_data);
+            Self::update_texture(&self.queue, &self.texture, texture_data);
 
             // Takes 6 vertices (2 triangles = 1 square) and the vertex & fragment shader
             render_pass.draw(0..6, 0..1);
@@ -119,12 +123,12 @@ impl<'a> Backend<'a> {
         }
     }
 
-    pub fn resize(&mut self, window_size: Vec2<u32, ScreenSpace>, frame_data: &FrameData) {
+    pub fn resize(&mut self, window_size: Vec2<u32, WindowSpace>, texture_data: &TextureData) {
         optick::event!("Backend::resize");
 
         trace!(
             "Attempting window & texture resize to {:?}",
-            frame_data.size
+            texture_data.texture_size
         );
 
         self.window_size = window_size;
@@ -132,16 +136,22 @@ impl<'a> Backend<'a> {
         self.config.height = self.window_size.y;
         self.surface.configure(&self.device, &self.config);
 
-        self.resize_texture(frame_data);
+        self.resize_texture(texture_data);
     }
 
-    pub fn resize_texture(&mut self, frame_data: &FrameData) {
+    pub fn resize_texture(&mut self, texture_data: &TextureData) {
+        // Don't recreate the texture if its identical.
+        if texture_data.texture_size == vec2(self.texture.size().width, self.texture.size().height)
+        {
+            return;
+        }
+
         // create new texture
         self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("RGBA Texture"),
             size: wgpu::Extent3d {
-                width: frame_data.size.x,
-                height: frame_data.size.y,
+                width: texture_data.texture_size.x,
+                height: texture_data.texture_size.y,
                 depth_or_array_layers: 1, // set to 1 for 2D textures
             },
             mip_level_count: 1,
@@ -160,7 +170,7 @@ impl<'a> Backend<'a> {
         self.gpu_uniforms = GpuUniforms {
             padding: self.gpu_uniforms.padding,
             time: self.gpu_uniforms.time,
-            texture_size: frame_data.size.cast().to_array(),
+            texture_size: texture_data.texture_size.cast().to_array(),
             window_size: self.window_size.cast().to_array(),
         };
 
@@ -187,16 +197,21 @@ impl<'a> Backend<'a> {
             ],
         });
 
-        Self::update_texture(&self.queue, &self.texture, frame_data);
+        Self::update_texture(&self.queue, &self.texture, texture_data);
     }
 
-    fn update_texture(queue: &wgpu::Queue, texture: &wgpu::Texture, frame_data: &FrameData) {
+    fn update_texture(queue: &wgpu::Queue, texture: &wgpu::Texture, texture_data: &TextureData) {
         let tex_size = texture.size();
-        let computed_data_len = (4 * frame_data.size.x * frame_data.size.y) as usize;
+        let computed_data_len =
+            (4 * texture_data.texture_size.x * texture_data.texture_size.y) as usize;
 
-        assert_eq!(tex_size.width, frame_data.size.x);
-        assert_eq!(tex_size.height, frame_data.size.y);
-        assert_eq!(frame_data.buf.len(), computed_data_len, "{frame_data:#?}");
+        assert_eq!(tex_size.width, texture_data.texture_size.x);
+        assert_eq!(tex_size.height, texture_data.texture_size.y);
+        assert_eq!(
+            texture_data.texture_buffer.len(),
+            computed_data_len,
+            "{texture_data:#?}"
+        );
 
         queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -205,31 +220,31 @@ impl<'a> Backend<'a> {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            frame_data.buf,
+            texture_data.texture_buffer,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * frame_data.size.x),
-                rows_per_image: Some(frame_data.size.y),
+                bytes_per_row: Some(4 * texture_data.texture_size.x),
+                rows_per_image: Some(texture_data.texture_size.y),
             },
             wgpu::Extent3d {
-                width: frame_data.size.x,
-                height: frame_data.size.y,
+                width: texture_data.texture_size.x,
+                height: texture_data.texture_size.y,
                 depth_or_array_layers: 1,
             },
         );
     }
 
     async fn create_surface(
-        instance: &wgpu::Instance,
         window: &'a Window,
+        window_size: Vec2<u32, WindowSpace>,
+        instance: &wgpu::Instance,
     ) -> (
         wgpu::Surface<'a>,
         wgpu::Device,
         wgpu::Queue,
         wgpu::SurfaceConfiguration,
-        Vec2<u32, ScreenSpace>,
     ) {
-        let surface = instance.create_surface(window).unwrap();
+        let surface: wgpu::Surface<'a> = unsafe { instance.create_surface(window) }.unwrap();
         info!("Surface created");
 
         // >> Requesting Adapter (gpu abstraction) <<
@@ -251,9 +266,6 @@ impl<'a> Backend<'a> {
         info!("Device and Queue created");
 
         // >> Creating Surface Config <<
-        let window_size = window.inner_size();
-        let window_size = vec2(window_size.width, window_size.height);
-
         let capabilities = surface.get_capabilities(&adapter);
         let surface_format = capabilities
             .formats
@@ -276,26 +288,19 @@ impl<'a> Backend<'a> {
         surface.configure(&device, &config);
         info!("Surface configured with format '{surface_format:?}', {window_size:?}");
 
-        (surface, device, queue, config, window_size)
+        (surface, device, queue, config)
     }
 
     fn create_texture(
-        frame_data: &FrameData,
+        texture_data: &TextureData,
         queue: &wgpu::Queue,
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
     ) -> wgpu::Texture {
-        // Loading an image.
-        // let bytes = include_bytes!("patSilhouette.png");
-        // let image = image::load_from_memory(bytes).unwrap();
-        // let image_size = image::GenericImageView::dimensions(&image);
-        // let texture_data = image.to_rgba8().into_raw();
-        // info!("Image loaded with size {image_size:?}");
-
         // >> Creating Texture <<
         let texture_size = wgpu::Extent3d {
-            width: frame_data.size.x,
-            height: frame_data.size.y,
+            width: texture_data.texture_size.x,
+            height: texture_data.texture_size.y,
             depth_or_array_layers: 1, // set to 1 for 2D textures
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -312,7 +317,7 @@ impl<'a> Backend<'a> {
             // not supported on the WebGL2 backend.
             view_formats: &[],
         });
-        Self::update_texture(queue, &texture, frame_data);
+        Self::update_texture(queue, &texture, texture_data);
         info!("Texture created, size: {:?}", texture.size());
 
         texture
@@ -412,8 +417,8 @@ impl<'a> Backend<'a> {
 
     fn create_gpu_uniforms(
         device: &wgpu::Device,
-        texture_size: Vec2<u32, RenderSpace>,
-        window_size: Vec2<u32, ScreenSpace>,
+        texture_size: Vec2<u32, TextureSpace>,
+        window_size: Vec2<u32, WindowSpace>,
     ) -> (GpuUniforms, wgpu::Buffer) {
         // Create a GPU buffer to hold time values, for shader code!
         let gpu_uniforms = GpuUniforms {
@@ -476,7 +481,11 @@ impl<'a> Backend<'a> {
         (bind_group, sampler)
     }
 
-    pub async fn new(window: &'a Window, frame_data: FrameData<'_>) -> Self {
+    pub async fn new(
+        window: &'a Window,
+        window_size: Vec2<u32, WindowSpace>,
+        texture_data: TextureData<'_>,
+    ) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             // TODO(TOM): if wasm, use GL.
@@ -484,15 +493,15 @@ impl<'a> Backend<'a> {
         });
         info!("Instance created");
 
-        let (surface, device, queue, config, window_size) =
-            Self::create_surface(&instance, window).await;
+        let (surface, device, queue, config) =
+            Self::create_surface(&window, window_size, &instance).await;
 
-        let texture = Self::create_texture(&frame_data, &queue, &device, &config);
+        let texture = Self::create_texture(&texture_data, &queue, &device, &config);
 
         let (render_pipeline, bind_group_layout) = Self::create_render_pipeline(&device, &config);
 
         let (gpu_uniforms, gpu_data_buffer) =
-            Self::create_gpu_uniforms(&device, frame_data.size, window_size);
+            Self::create_gpu_uniforms(&device, texture_data.texture_size, window_size);
 
         let (bind_group, sampler) =
             Self::create_bind_group(&device, &bind_group_layout, &texture, &gpu_data_buffer);
