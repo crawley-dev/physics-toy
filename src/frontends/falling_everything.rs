@@ -6,13 +6,15 @@ use crate::{
     utils::{
         // canvas::Canvas,
         consts::{
-            CAMERA_RESISTANCE, CAMERA_SPEED, DGRAY, MOUSE_DRAWBACK_MULTIPLIER, RED, SIM_MAX_SCALE,
+            CAMERA_RESISTANCE, CAMERA_SPEED, GRAY, GREEN, LIGHT_GRAY, MOUSE_DRAWBACK_MULTIPLIER,
+            RED, SIM_MAX_SCALE, WHITE,
         },
         input_data::InputData,
         vec2::{vec2, TextureSpace, Vec2, WindowSpace, WorldSpace},
         world::World,
     },
 };
+use core::f32;
 use std::{
     clone,
     ops::{Add, Div, Mul, Sub},
@@ -64,17 +66,56 @@ impl Frontend for FallingEverything {
     }
 
     fn update(&mut self, inputs: &mut InputData, delta_time: Duration) {
-        self.world.draw_all(DGRAY);
-
+        self.world.draw_all(LIGHT_GRAY);
         self.handle_inputs(inputs, delta_time.as_secs_f64());
 
-        if (self.state.is_running) {
+        if (self.state.is_running || inputs.is_pressed(KeyCode::ArrowRight)) {
+            if self.objects.len() > 0 && inputs.is_held(KeyCode::AltLeft) {
+                self.objects[0].object.centre = inputs
+                    .mouse_pos
+                    .to_world_space(self.state.texture_scale, self.world.camera_pos)
+                    .cast();
+                self.objects[0]
+                    .object
+                    .rotate(f32::consts::FRAC_PI_3 * delta_time.as_secs_f32());
+            }
+
+            let mut collisions_vec = vec![vec![false; self.objects.len()]; self.objects.len()];
             for i in 0..self.objects.len() {
-                let obj = &mut self.objects[i];
-                obj.update(delta_time.as_secs_f32());
-                self.world.draw_polygon(&obj.object.vertices, RED);
+                let body = &mut self.objects[i];
+                body.update(delta_time.as_secs_f32());
+
+                for j in 0..self.objects.len() {
+                    if i == j || collisions_vec[i][j] {
+                        continue;
+                    }
+
+                    let body = &self.objects[i];
+                    let other = &self.objects[j];
+                    if let Some(collision) = body.object.does_collide(&other.object) {
+                        println!("collision between {i}, {j} .. {collision:#?}");
+                        let body = &mut self.objects[i];
+                        body.apply_force(-collision.normal * 15.0, body.object.centre);
+                        collisions_vec[i][j] = true;
+                    }
+                }
+
+                let body = &self.objects[i];
+                if collisions_vec[i].iter().any(|x| *x) {
+                    self.world.draw_polygon(&body.object.world_verts(), RED);
+                } else {
+                    self.world
+                        .draw_circle_fill(body.object.centre.cast(), 4, GREEN);
+                }
+            }
+        } else {
+            for body in &self.objects {
+                self.world
+                    .draw_circle_fill(body.object.centre.cast(), 4, GREEN);
             }
         }
+
+        self.world.draw_grid();
 
         self.prev_state = self.state;
         self.state.frame += 1;
@@ -85,7 +126,7 @@ impl Frontend for FallingEverything {
             frame: 0,
             texture_scale: init_scale_factor,
             window_size,
-            is_running: true,
+            is_running: false,
         };
         let prev_state = state.clone();
         let viewport_size = window_size.to_texture_space(init_scale_factor);
@@ -112,8 +153,8 @@ impl FallingEverything {
     fn handle_camera_inputs(&mut self, inputs: &InputData, delta_time: f64) {
         // Branchless Camera Movement
         let mut camera_accel = vec2(0.0, 0.0);
-        camera_accel.y -= inputs.is_held(KeyCode::KeyW) as i32 as f64;
-        camera_accel.y += inputs.is_held(KeyCode::KeyS) as i32 as f64;
+        camera_accel.y += inputs.is_held(KeyCode::KeyW) as i32 as f64;
+        camera_accel.y -= inputs.is_held(KeyCode::KeyS) as i32 as f64;
         camera_accel.x += inputs.is_held(KeyCode::KeyD) as i32 as f64;
         camera_accel.x -= inputs.is_held(KeyCode::KeyA) as i32 as f64;
         camera_accel *= CAMERA_SPEED * (SIM_MAX_SCALE - self.state.texture_scale + 1) as f64;
@@ -126,6 +167,11 @@ impl FallingEverything {
     }
 
     pub fn handle_object_spawning(&mut self, inputs: &InputData) {
+        if inputs.is_pressed(KeyCode::KeyC) {
+            self.objects.clear();
+            return;
+        }
+
         let mass = 0.3;
         if inputs.was_mouse_dragging() {
             let released_pos = inputs
@@ -147,11 +193,21 @@ impl FallingEverything {
         } else if inputs.was_mouse_pressed() {
             let velocity = vec2(0.0, 0.0);
             let force = vec2(0.0, 0.0);
-            self.spawn_rigidbody(
+
+            println!(
+                "spawning rigidbody at {:?}, {:?}",
                 inputs
                     .mouse_pos
                     .to_world_space(self.state.texture_scale, self.world.camera_pos)
                     .cast::<f32>(),
+                self.world.camera_pos
+            );
+
+            self.spawn_rigidbody(
+                inputs
+                    .mouse_pos
+                    .to_world_space(self.state.texture_scale, self.world.camera_pos)
+                    .cast(),
                 mass,
                 velocity,
                 force,
@@ -166,7 +222,7 @@ impl FallingEverything {
         velocity: Vec2<f32, WorldSpace>,
         force: Vec2<f32, WorldSpace>,
     ) -> &RigidBody {
-        let object = Square::new(position, 10.0);
+        let object = Square::new(position, 18.0);
         let rigid_body = RigidBody::new(object, mass, 1.0, velocity, force);
         self.objects.push(rigid_body);
         self.objects.last().unwrap()
@@ -188,6 +244,42 @@ pub struct RigidBody {
 }
 
 impl RigidBody {
+    fn apply_force(&mut self, impulse: Vec2<f32, WorldSpace>, point: Vec2<f32, WorldSpace>) {
+        let r = point - self.object.centre;
+        self.force += impulse;
+        self.torque = r.cross_product(impulse);
+    }
+
+    fn update(&mut self, delta_time: f32) {
+        let mut prev_pos = self.object.centre;
+
+        // Linear
+        let acceleration = self.force * self.inv_mass;
+        self.velocity += acceleration * delta_time;
+        self.object.translate(self.velocity * delta_time);
+
+        // Angular
+        let angular_acceleration = self.torque * self.inv_inertia;
+        self.angular_velocity += angular_acceleration * delta_time;
+        self.rotation += self.angular_velocity * delta_time;
+        self.object.rotate(self.angular_velocity * delta_time);
+
+        // Reset Accumulators
+        self.force = vec2(0.0, 0.0);
+        self.torque = 0.0;
+    }
+
+    fn new_rect(
+        shape: Square,
+        mass: f32,
+        size: Vec2<f32, WorldSpace>,
+        velocity: Vec2<f32, WorldSpace>,
+        force: Vec2<f32, WorldSpace>,
+    ) -> Self {
+        let inertia = (1.0 / 12.0) * mass * size.x * size.y; // Moment of inertia for a square
+        RigidBody::new(shape, mass, inertia, velocity, force)
+    }
+
     fn new(
         object: Square,
         mass: f32,
@@ -214,45 +306,9 @@ impl RigidBody {
             force,
         }
     }
-
-    fn new_rect(
-        shape: Square,
-        mass: f32,
-        size: Vec2<f32, WorldSpace>,
-        velocity: Vec2<f32, WorldSpace>,
-        force: Vec2<f32, WorldSpace>,
-    ) -> Self {
-        let inertia = (1.0 / 12.0) * mass * size.x * size.y; // Moment of inertia for a square
-        RigidBody::new(shape, mass, inertia, velocity, force)
-    }
-
-    fn apply_force(&mut self, impulse: Vec2<f32, WorldSpace>, point: Vec2<f32, WorldSpace>) {
-        let r = point - self.object.centre;
-        self.velocity += impulse * self.inv_mass;
-        let torque_impulse = r.cross_product(impulse);
-        self.angular_velocity += torque_impulse * self.inv_inertia;
-    }
-
-    fn update(&mut self, delta_time: f32) {
-        let mut prev_pos = self.object.centre;
-
-        // Linear
-        let acceleration = self.force * self.inv_mass;
-        self.velocity += acceleration * delta_time;
-        self.object.translate(self.velocity * delta_time);
-
-        // Angular
-        let angular_acceleration = self.torque * self.inv_inertia;
-        self.angular_velocity += angular_acceleration * delta_time;
-        self.rotation += self.angular_velocity * delta_time;
-        self.object.rotate(self.angular_velocity * delta_time);
-
-        // Reset Accumulators
-        self.force = vec2(0.0, 0.0);
-        self.torque = 0.0;
-    }
 }
 
+#[derive(Debug, Clone)]
 pub struct Collision {
     normal: Vec2<f32, WorldSpace>,
     penetration: f32,
@@ -260,101 +316,131 @@ pub struct Collision {
 
 #[derive(Debug, Clone)]
 pub struct Square {
-    vertices: [Vec2<f32, WorldSpace>; 4],
-    centre: Vec2<f32, WorldSpace>,
+    local_vertices: [Vec2<f32, WorldSpace>; 4],
+    pub centre: Vec2<f32, WorldSpace>,
 }
 
 impl Square {
-    pub fn new(centre: Vec2<f32, WorldSpace>, size: f32) -> Self {
-        let half = size / 2.0;
-        let vertices = [
-            vec2(centre.x - half, centre.y - half),
-            vec2(centre.x + half, centre.y - half),
-            vec2(centre.x + half, centre.y + half),
-            vec2(centre.x - half, centre.y + half),
-        ];
-        Square { vertices, centre }
-    }
-
-    fn does_collide(&self, other: &Self) -> Option<Collision> {
-        None
-        // let edge_normals = self.compute_edge_normals();
-        // let other_edge_normals = other.compute_edge_normals();
-        // let axes = edge_normals
-        //     .into_iter()
-        //     .chain(other_edge_normals.into_iter())
-        //     .collect::<Vec<Vec2<f32, WorldSpace>>>();
-
-        // let centre_a =
-        //     self.vertices.iter().sum::<Vec2<f32, WorldSpace>>() / self.vertices.len() as f32;
-        // // let centre_a = self.vertices.iter().copied().sum::<Vec2<f32, WorldSpace>>()
-        // // / self.vertices.len() as f32;
-        // // let centre_b = other
-        // //     .vertices
-        // //     .iter()
-        // //     .copied()
-        // //     .sum::<Vec2<f32, WorldSpace>>()
-        // //     / other.vertices.len() as f32;
-        // // let ab = centre_b - centre_a;
-
-        // let min_overlap = f32::INFINITY;
-        // let mut best_axis = vec2(0.0, 0.0);
-
-        // // for mut axis in axes {
-        // //     if axis.cross_product(ab) < 0.0 {
-        // //         axis = -axis;
-        // //     }
-
-        // //     let proj_a = project(self, axis);
-        // //     let proj_b = project(other, axis);
-        // //     let overlap = interval_overlap(proj_a, proj_b);
-
-        // //     if overlap <= 0.0 {
-        // //         return None; // No collision
-        // //     }
-
-        // //     if overlap < min_overlap {
-        // //         min_overlap = overlap;
-        // //         best_axis = axis;
-        // //     }
-        // // }
-
-        // Some(Collision {
-        //     normal: best_axis,
-        //     penetration: min_overlap,
-        // })
-    }
-
-    pub fn compute_edge_normals(&self) -> [Vec2<f32, WorldSpace>; 4] {
-        let mut axes: [Vec2<f32, WorldSpace>; 4] = [vec2(0.0, 0.0); 4];
-        for i in 0..4 {
-            let next = (i + 1) % 4;
-            let edge = self.vertices[next] - self.vertices[i];
-            axes[i] = vec2(-edge.y, edge.x);
-        }
-        axes
-    }
-
-    // fn compute_edge_normals(&self)
-
     pub fn transform(&mut self, translation: Vec2<f32, WorldSpace>, rotation: f32) {
-        self.centre += translation;
         self.translate(translation);
         self.rotate(rotation);
     }
 
     pub fn translate(&mut self, offset: Vec2<f32, WorldSpace>) {
         self.centre += offset;
-        for v in self.vertices.iter_mut() {
-            *v = *v + offset;
-        }
     }
 
     pub fn rotate(&mut self, angle_radians: f32) {
         let (s, c) = angle_radians.sin_cos();
-        for v in &mut self.vertices {
+        for v in &mut self.local_vertices {
             // Rotate each vertex around the centre
             *v = vec2(c * v.x - s * v.y, s * v.x + c * v.y);
+        }
+    }
+
+    // region: Polygon Collision Detection
+    pub fn world_verts(&self) -> [Vec2<f32, WorldSpace>; 4] {
+        let mut world_verts = self.local_vertices;
+        for v in &mut world_verts {
+            *v += self.centre;
+        }
+        world_verts
+    }
+
+    // Compute Unit normals (axes) from polygon edges
+    fn get_polygon_axes(world_verts: &[Vec2<f32, WorldSpace>; 4]) -> [Vec2<f32, WorldSpace>; 4] {
+        let mut axes = [vec2(0.0, 0.0); 4];
+        for i in 0..4 {
+            let a = world_verts[i];
+            let b = world_verts[(i + 1) % 4];
+
+            let edge = b - a;
+            let n = edge.perpendicular().normalise();
+            axes[i] = n;
+        }
+        axes
+    }
+
+    fn project_axis(
+        vertices: &[Vec2<f32, WorldSpace>; 4],
+        axis: Vec2<f32, WorldSpace>,
+    ) -> (f32, f32) {
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+
+        for v in vertices {
+            let projection = v.dot_product(axis);
+            min = min.min(projection);
+            max = max.max(projection);
+        }
+
+        (min, max)
+    }
+
+    fn internal_overlap(a: (f32, f32), b: (f32, f32)) -> f32 {
+        let (a_min, a_max) = a;
+        let (b_min, b_max) = b;
+        f32::min(a_max, b_max) - f32::max(a_min, b_min)
+    }
+
+    fn does_collide(&self, other: &Self) -> Option<Collision> {
+        let world_verts_a = self.world_verts();
+        let world_verts_b = other.world_verts();
+
+        let mut polygon_axes_a = Self::get_polygon_axes(&world_verts_a);
+        let mut polygon_axes_b = Self::get_polygon_axes(&world_verts_b);
+
+        let mut min_overlap = f32::INFINITY;
+        let mut best_axis = vec2(0.0, 0.0);
+
+        let ab = other.centre - self.centre;
+
+        for axis in polygon_axes_a.iter_mut().chain(polygon_axes_b.iter_mut()) {
+            let axis = axis.normalise();
+            if axis.x == 0.0 && axis.y == 0.0 {
+                continue;
+            }
+
+            // Ensure axis points from a to b
+            let axis = if axis.dot_product(ab) < 0.0 {
+                axis * -1.0
+            } else {
+                axis
+            };
+
+            let pa = Self::project_axis(&world_verts_a, axis);
+            let pb = Self::project_axis(&world_verts_b, axis);
+
+            let overlap = Self::internal_overlap(pa, pb);
+
+            if overlap <= 0.0 {
+                return None; // Found a separating axis, no collision
+            }
+
+            if overlap < min_overlap {
+                min_overlap = overlap;
+                best_axis = axis;
+            }
+        }
+
+        return Some(Collision {
+            normal: best_axis,
+            penetration: min_overlap,
+        });
+    }
+    // endregion
+
+    pub fn new(centre: Vec2<f32, WorldSpace>, size: f32) -> Self {
+        let half = size / 2.0;
+        let local_vertices = [
+            vec2(-half, -half),
+            vec2(half, -half),
+            vec2(half, half),
+            vec2(-half, half),
+        ];
+        Square {
+            local_vertices,
+            centre,
         }
     }
 }

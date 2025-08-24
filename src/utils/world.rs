@@ -1,12 +1,16 @@
-use std::{fmt::Debug, marker::PhantomData, ops::Sub};
+use std::{
+    fmt::Debug,
+    marker::PhantomData,
+    ops::{Div, Sub},
+};
 
 use num::{Num, NumCast};
 use wgpu::RenderBundleDepthStencil;
 
 use crate::utils::{
     colour::Rgba,
-    consts::CAMERA_RESISTANCE,
-    vec2::{vec2, CoordSpace, TextureSpace, Vec2, WindowSpace, WorldSpace},
+    consts::{BLACK, CAMERA_RESISTANCE, RED},
+    vec2::{vec2, CentredTextureSpace, CoordSpace, TextureSpace, Vec2, WindowSpace, WorldSpace},
 };
 
 #[derive(Debug, Clone)]
@@ -14,6 +18,7 @@ pub struct World {
     pub camera_pos: Vec2<f64, WorldSpace>,
     pub camera_vel: Vec2<f64, WorldSpace>,
 
+    viewport_centre: Vec2<i32, CentredTextureSpace>,
     pub viewport_size: Vec2<u32, TextureSpace>,
     pub viewport_texture: Vec<u8>,
 }
@@ -32,6 +37,7 @@ impl World {
 
     pub fn resize(&mut self, new_size: Vec2<u32, TextureSpace>) {
         self.viewport_size = new_size;
+        self.viewport_centre = new_size.cast::<i32>().cast_unit().div(2);
         self.viewport_texture = vec![0; (new_size.x * new_size.y * 4) as usize];
     }
 
@@ -51,6 +57,7 @@ impl World {
         Self {
             camera_pos: vec2(0.0, 0.0),
             camera_vel: vec2(0.0, 0.0),
+            viewport_centre: viewport_size.cast::<i32>().cast_unit().div(2),
             viewport_size,
             viewport_texture,
         }
@@ -60,12 +67,12 @@ impl World {
 // Drawing
 impl World {
     pub fn draw_cell(&mut self, position: Vec2<i32, WorldSpace>, colour: Rgba) {
-        let position = position.to_texture_space(self.camera_pos);
+        let mut position = position.to_texture_space(self.camera_pos);
+
         if self.is_out_of_bounds(position) {
             return;
         }
 
-        // is_out_of_bounds does an underflow check, so we can safely cast to u32.
         let index = 4 * (position.y as u32 * self.viewport_size.x + position.x as u32) as usize;
         if index < self.viewport_texture.len() {
             self.viewport_texture[index] = colour.r;
@@ -82,6 +89,23 @@ impl World {
             chunk[2] = colour.b;
             chunk[3] = colour.a;
         }
+    }
+
+    pub fn draw_grid(&mut self) {
+        self.draw_circle_fill(
+            vec2(0, 0)
+                .to_centred_texture(self.viewport_centre)
+                .cast_unit(),
+            4,
+            RED,
+        );
+
+        // x axis line
+        // self.draw_line(
+        //     vec2(self.camera_pos.x as f32, 0.0),
+        //     vec2(self.camera_pos.x as f32, self.viewport_size.y as f32),
+        //     BLACK,
+        // )
     }
 
     pub fn draw_line(

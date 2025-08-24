@@ -3,14 +3,17 @@ use crate::utils::colour::Rgba;
 // Colours (cell_sim.rs / gravity_sim.rs)
 pub const GREEN: Rgba = Rgba::from_rgb(40, 255, 40);
 pub const WHITE: Rgba = Rgba::from_rgb(255, 255, 255);
-pub const DGRAY: Rgba = Rgba::from_rgb(44, 44, 44);
+pub const GRAY: Rgba = Rgba::from_rgb(44, 44, 44);
+pub const LIGHT_GRAY: Rgba = Rgba::from_rgb(65, 65, 65);
+pub const DARK_GRAY: Rgba = Rgba::from_rgb(20, 20, 20);
 pub const RED: Rgba = Rgba::from_rgb(255, 40, 40);
+pub const BLACK: Rgba = Rgba::from_rgb(0, 0, 0);
 
 // Generic Parameters (*)
 pub const INIT_TITLE: &str = "Gravity Sim";
 pub const INIT_WIDTH: u32 = 800;
 pub const INIT_HEIGHT: u32 = 600;
-pub const INIT_SCALE: u32 = 3;
+pub const INIT_SCALE: u32 = 2;
 pub const INIT_DRAW_SIZE: i32 = 8;
 pub const SIM_MAX_SCALE: u32 = 10;
 pub const MAX_DRAW_SIZE: i32 = 500;
